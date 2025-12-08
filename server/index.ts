@@ -14,7 +14,7 @@ import { WebSocketHandler } from './websocket/WebSocketHandler';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.SERVER_PORT || 8000;
 
 // Middleware
 app.use(cors({

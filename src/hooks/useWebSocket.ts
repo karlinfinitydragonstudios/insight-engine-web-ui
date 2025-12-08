@@ -23,7 +23,7 @@ interface UseWebSocketReturn {
   lastMessage: WebSocketMessage | null;
 }
 
-const DEFAULT_URL = 'ws://localhost:3001/ws';
+const DEFAULT_URL = 'ws://localhost:8000/ws';
 const DEFAULT_RECONNECT_INTERVAL = 3000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 
