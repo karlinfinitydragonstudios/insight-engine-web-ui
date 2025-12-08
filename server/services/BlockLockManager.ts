@@ -39,12 +39,12 @@ export class BlockLockManager {
     const denied: { blockId: string; heldBy: string }[] = [];
 
     // Clean up expired locks first
-    await db.delete(blockLocks).where(lt(blockLocks.expiresAt, new Date()));
+    await db().delete(blockLocks).where(lt(blockLocks.expiresAt, new Date()));
 
     for (const blockId of blockIds) {
       try {
         // Check if lock exists
-        const [existing] = await db
+        const [existing] = await db()
           .select()
           .from(blockLocks)
           .where(eq(blockLocks.blockId, blockId))
@@ -59,7 +59,7 @@ export class BlockLockManager {
         }
 
         // Try to acquire lock
-        const [lock] = await db
+        const [lock] = await db()
           .insert(blockLocks)
           .values({
             blockId,
@@ -80,7 +80,7 @@ export class BlockLockManager {
         });
       } catch (error) {
         // Lock might have been acquired by another process
-        const [existing] = await db
+        const [existing] = await db()
           .select()
           .from(blockLocks)
           .where(eq(blockLocks.blockId, blockId))
@@ -102,7 +102,7 @@ export class BlockLockManager {
   async releaseLocks(blockIds: string[], lockedBy: string): Promise<void> {
     if (blockIds.length === 0) return;
 
-    await db
+    await db()
       .delete(blockLocks)
       .where(
         and(
@@ -116,7 +116,7 @@ export class BlockLockManager {
    * Release all locks for a session (used on disconnect)
    */
   async releaseSessionLocks(sessionId: string): Promise<void> {
-    await db.delete(blockLocks).where(eq(blockLocks.sessionId, sessionId));
+    await db().delete(blockLocks).where(eq(blockLocks.sessionId, sessionId));
   }
 
   /**
@@ -127,7 +127,7 @@ export class BlockLockManager {
 
     const newExpiresAt = new Date(Date.now() + additionalMs);
 
-    await db
+    await db()
       .update(blockLocks)
       .set({ expiresAt: newExpiresAt })
       .where(
@@ -143,9 +143,9 @@ export class BlockLockManager {
    */
   async getDocumentLocks(documentId: string): Promise<BlockLock[]> {
     // Clean up expired locks first
-    await db.delete(blockLocks).where(lt(blockLocks.expiresAt, new Date()));
+    await db().delete(blockLocks).where(lt(blockLocks.expiresAt, new Date()));
 
-    const locks = await db
+    const locks = await db()
       .select()
       .from(blockLocks)
       .where(eq(blockLocks.documentId, documentId));
@@ -164,7 +164,7 @@ export class BlockLockManager {
    * Check if a specific block is locked
    */
   async isBlockLocked(blockId: string): Promise<{ locked: boolean; lockedBy?: string }> {
-    const [lock] = await db
+    const [lock] = await db()
       .select()
       .from(blockLocks)
       .where(

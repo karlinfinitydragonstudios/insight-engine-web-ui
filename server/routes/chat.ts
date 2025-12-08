@@ -1,9 +1,143 @@
 import { Router } from 'express';
 import { db } from '../config/database';
 import { chatMessages, sessions } from '../db/schema';
-import { eq, desc, and, gt } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
+import { openaiService, type ChatMessage } from '../services/OpenAIService';
 
 export const chatRouter = Router();
+
+// In-memory message store for stateless operation (when DB is unavailable)
+const messageStore = new Map<string, Array<{ role: string; content: string }>>();
+
+// Helper to ensure session exists in database
+async function ensureSession(sessionId: string): Promise<boolean> {
+  try {
+    const [existing] = await db()
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+
+    if (!existing) {
+      // Create new session
+      await db().insert(sessions).values({
+        id: sessionId,
+        status: 'active',
+        metadata: {},
+      });
+    }
+    return true;
+  } catch (error) {
+    console.error('Failed to ensure session:', error);
+    return false;
+  }
+}
+
+// Send message and get streaming AI response
+chatRouter.post('/:sessionId/send', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    // Set up SSE headers first
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // Ensure session exists in database
+    const sessionReady = await ensureSession(sessionId);
+
+    // Get or create in-memory message history (for OpenAI context)
+    if (!messageStore.has(sessionId)) {
+      messageStore.set(sessionId, []);
+    }
+    const history = messageStore.get(sessionId)!;
+
+    // Add user message to history
+    history.push({ role: 'user', content: message });
+
+    // Save user message to database if session is ready
+    if (sessionReady) {
+      try {
+        await db().insert(chatMessages).values({
+          sessionId,
+          role: 'user',
+          content: message,
+          documentReferences: [],
+        });
+      } catch (dbError) {
+        console.error('Failed to save user message:', dbError);
+      }
+    }
+
+    // Build messages for OpenAI
+    const chatHistory: ChatMessage[] = [
+      {
+        role: 'system',
+        content: `You are an intelligent document analysis assistant called Insight Engine.
+You help users understand, analyze, and work with documents.
+Provide clear, well-structured responses using markdown formatting.
+Use headers, bullet points, code blocks, and emphasis where appropriate.`,
+      },
+      ...history.slice(-10).map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      })),
+    ];
+
+    // Send start event
+    res.write(`data: ${JSON.stringify({ type: 'start' })}\n\n`);
+
+    // Stream response
+    await openaiService.streamChat(chatHistory, {
+      onToken: (token) => {
+        res.write(`data: ${JSON.stringify({ type: 'token', content: token })}\n\n`);
+      },
+      onComplete: async (fullContent) => {
+        // Add assistant response to history
+        history.push({ role: 'assistant', content: fullContent });
+
+        // Save assistant message to database
+        if (sessionReady) {
+          try {
+            await db().insert(chatMessages).values({
+              sessionId,
+              role: 'assistant',
+              content: fullContent,
+              documentReferences: [],
+            });
+            // Update session activity
+            await db()
+              .update(sessions)
+              .set({ lastActivityAt: new Date() })
+              .where(eq(sessions.id, sessionId));
+          } catch (dbError) {
+            console.error('Failed to save assistant message:', dbError);
+          }
+        }
+
+        res.write(`data: ${JSON.stringify({ type: 'complete', content: fullContent })}\n\n`);
+        res.end();
+      },
+      onError: (error) => {
+        res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
+        res.end();
+      },
+    });
+  } catch (error) {
+    console.error('Send message error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error' });
+    } else {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Internal server error' })}\n\n`);
+      res.end();
+    }
+  }
+});
 
 // Get chat history for session
 chatRouter.get('/:sessionId/history', async (req, res) => {
@@ -16,7 +150,7 @@ chatRouter.get('/:sessionId/history', async (req, res) => {
     const offset = pageNum * limit;
 
     // Get messages
-    const messages = await db
+    const messages = await db()
       .select()
       .from(chatMessages)
       .where(eq(chatMessages.sessionId, sessionId))
@@ -25,7 +159,7 @@ chatRouter.get('/:sessionId/history', async (req, res) => {
       .offset(offset);
 
     // Get total count for pagination
-    const allMessages = await db
+    const allMessages = await db()
       .select()
       .from(chatMessages)
       .where(eq(chatMessages.sessionId, sessionId));
@@ -65,7 +199,7 @@ chatRouter.post('/:sessionId/messages', async (req, res) => {
     }
 
     // Verify session exists
-    const [session] = await db
+    const [session] = await db()
       .select()
       .from(sessions)
       .where(eq(sessions.id, sessionId))
@@ -76,7 +210,7 @@ chatRouter.post('/:sessionId/messages', async (req, res) => {
     }
 
     // Create message
-    const [message] = await db
+    const [message] = await db()
       .insert(chatMessages)
       .values({
         sessionId,
@@ -90,7 +224,7 @@ chatRouter.post('/:sessionId/messages', async (req, res) => {
       .returning();
 
     // Update session activity
-    await db
+    await db()
       .update(sessions)
       .set({ lastActivityAt: new Date() })
       .where(eq(sessions.id, sessionId));
@@ -107,7 +241,7 @@ chatRouter.get('/messages/:messageId', async (req, res) => {
   try {
     const { messageId } = req.params;
 
-    const [message] = await db
+    const [message] = await db()
       .select()
       .from(chatMessages)
       .where(eq(chatMessages.id, messageId))
@@ -130,7 +264,7 @@ chatRouter.patch('/messages/:messageId', async (req, res) => {
     const { messageId } = req.params;
     const { content, pipelineResults } = req.body;
 
-    const [updated] = await db
+    const [updated] = await db()
       .update(chatMessages)
       .set({
         ...(content && { content }),
@@ -156,7 +290,7 @@ chatRouter.get('/:sessionId/recent', async (req, res) => {
     const { sessionId } = req.params;
     const { limit = 10 } = req.query;
 
-    const messages = await db
+    const messages = await db()
       .select()
       .from(chatMessages)
       .where(eq(chatMessages.sessionId, sessionId))
@@ -175,7 +309,7 @@ chatRouter.get('/:sessionId/export', async (req, res) => {
   try {
     const { sessionId } = req.params;
 
-    const messages = await db
+    const messages = await db()
       .select()
       .from(chatMessages)
       .where(eq(chatMessages.sessionId, sessionId))

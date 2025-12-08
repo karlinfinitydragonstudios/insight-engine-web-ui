@@ -20,7 +20,7 @@ authRouter.post('/register', async (req, res) => {
     }
 
     // Check if user exists
-    const existingUser = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    const existingUser = await db().select().from(users).where(eq(users.email, email)).limit(1);
     if (existingUser.length > 0) {
       return res.status(400).json({ error: 'User already exists' });
     }
@@ -29,7 +29,7 @@ authRouter.post('/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
 
     // Create user
-    const [newUser] = await db.insert(users).values({
+    const [newUser] = await db().insert(users).values({
       email,
       passwordHash,
       name,
@@ -62,7 +62,7 @@ authRouter.post('/login', async (req, res) => {
     }
 
     // Find user
-    const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    const [user] = await db().select().from(users).where(eq(users.email, email)).limit(1);
     if (!user || !user.passwordHash) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -101,7 +101,7 @@ authRouter.get('/me', async (req, res) => {
     const token = authHeader.substring(7);
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
 
-    const [user] = await db.select().from(users).where(eq(users.id, decoded.userId)).limit(1);
+    const [user] = await db().select().from(users).where(eq(users.id, decoded.userId)).limit(1);
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
     }

@@ -14,7 +14,7 @@ sessionsRouter.post('/', async (req, res) => {
 
     const expiresAt = new Date(Date.now() + SESSION_TIMEOUT_MS);
 
-    const [session] = await db
+    const [session] = await db()
       .insert(sessions)
       .values({
         userId,
@@ -39,7 +39,7 @@ sessionsRouter.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [session] = await db
+    const [session] = await db()
       .select()
       .from(sessions)
       .where(eq(sessions.id, id))
@@ -51,7 +51,7 @@ sessionsRouter.get('/:id', async (req, res) => {
 
     // Check if expired
     if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
-      await db
+      await db()
         .update(sessions)
         .set({ status: 'expired' })
         .where(eq(sessions.id, id));
@@ -73,7 +73,7 @@ sessionsRouter.post('/:id/heartbeat', async (req, res) => {
 
     const newExpiresAt = new Date(Date.now() + SESSION_TIMEOUT_MS);
 
-    const [updated] = await db
+    const [updated] = await db()
       .update(sessions)
       .set({
         lastActivityAt: new Date(),
@@ -101,7 +101,7 @@ sessionsRouter.post('/:id/restore', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [session] = await db
+    const [session] = await db()
       .select()
       .from(sessions)
       .where(eq(sessions.id, id))
@@ -120,7 +120,7 @@ sessionsRouter.post('/:id/restore', async (req, res) => {
     // Restore session
     const newExpiresAt = new Date(Date.now() + SESSION_TIMEOUT_MS);
 
-    const [restored] = await db
+    const [restored] = await db()
       .update(sessions)
       .set({
         status: 'active',
@@ -145,7 +145,7 @@ sessionsRouter.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [terminated] = await db
+    const [terminated] = await db()
       .update(sessions)
       .set({ status: 'terminated' })
       .where(eq(sessions.id, id))
@@ -165,7 +165,7 @@ sessionsRouter.delete('/:id', async (req, res) => {
 // Cleanup expired sessions (can be called by cron job)
 sessionsRouter.post('/cleanup', async (req, res) => {
   try {
-    const result = await db
+    const result = await db()
       .update(sessions)
       .set({ status: 'expired' })
       .where(lt(sessions.expiresAt, new Date()));

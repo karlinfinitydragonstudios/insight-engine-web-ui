@@ -1,12 +1,16 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Paperclip, Mic } from 'lucide-react';
 import { ChatMessage } from './ChatMessage';
-import { useChatStore, usePipelineStore } from '../../store';
+import { useChatStore, usePipelineStore, useAppStore } from '../../store';
 import { cn } from '../../lib/utils';
+import { v4 as uuidv4 } from 'uuid';
+
+const API_URL = 'http://localhost:8000';
 
 export function ChatPanel() {
-  const { messages, isLoading, streamingMessageId } = useChatStore();
+  const { messages, isLoading, streamingMessageId, addMessage, setLoading, setStreamingMessage, appendToMessage } = useChatStore();
   const { isAnalyzing } = usePipelineStore();
+  const { session } = useAppStore();
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -27,13 +31,99 @@ export function ChatPanel() {
     }
   }, [input]);
 
+  const sendMessage = useCallback(async (content: string) => {
+    // Create a temporary session ID if not connected
+    const sessionId = session.sessionId || uuidv4();
+
+    // Add user message to UI immediately
+    const userMessage = {
+      id: uuidv4(),
+      sessionId,
+      role: 'user' as const,
+      content,
+      timestamp: new Date().toISOString(),
+      documentReferences: [],
+    };
+    addMessage(userMessage);
+    setLoading(true);
+
+    // Create placeholder for assistant message
+    const assistantMessageId = uuidv4();
+    const assistantMessage = {
+      id: assistantMessageId,
+      sessionId,
+      role: 'assistant' as const,
+      content: '',
+      timestamp: new Date().toISOString(),
+      documentReferences: [],
+    };
+    addMessage(assistantMessage);
+    setStreamingMessage(assistantMessageId);
+
+    try {
+      const response = await fetch(`${API_URL}/api/chat/${sessionId}/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: content }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body');
+      }
+
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              if (data.type === 'token') {
+                appendToMessage(assistantMessageId, data.content);
+              } else if (data.type === 'complete') {
+                setStreamingMessage(null);
+                setLoading(false);
+              } else if (data.type === 'error') {
+                console.error('Stream error:', data.error);
+                appendToMessage(assistantMessageId, `\n\nError: ${data.error}`);
+                setStreamingMessage(null);
+                setLoading(false);
+              }
+            } catch (e) {
+              // Ignore parse errors for incomplete chunks
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      appendToMessage(assistantMessageId, `Error: Failed to send message. Make sure the server is running.`);
+      setStreamingMessage(null);
+      setLoading(false);
+    }
+  }, [session.sessionId, addMessage, setLoading, setStreamingMessage, appendToMessage]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading || isAnalyzing) return;
 
-    // TODO: Implement actual message sending via WebSocket
-    console.log('Sending message:', input);
+    const content = input.trim();
     setInput('');
+    await sendMessage(content);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

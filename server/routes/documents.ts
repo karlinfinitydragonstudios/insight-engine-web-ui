@@ -9,7 +9,7 @@ export const documentsRouter = Router();
 // Get all documents
 documentsRouter.get('/', async (req, res) => {
   try {
-    const docs = await db
+    const docs = await db()
       .select({
         id: documents.id,
         fileName: documents.fileName,
@@ -34,7 +34,7 @@ documentsRouter.get('/:id', async (req, res) => {
     const { id } = req.params;
 
     // Get document
-    const [doc] = await db
+    const [doc] = await db()
       .select()
       .from(documents)
       .where(eq(documents.id, id))
@@ -45,14 +45,14 @@ documentsRouter.get('/:id', async (req, res) => {
     }
 
     // Get sections
-    const sections = await db
+    const sections = await db()
       .select()
       .from(documentSections)
       .where(eq(documentSections.documentId, id))
       .orderBy(documentSections.position);
 
     // Get blocks for all sections
-    const blocks = await db
+    const blocks = await db()
       .select()
       .from(documentBlocks)
       .where(eq(documentBlocks.documentId, id))
@@ -87,7 +87,7 @@ documentsRouter.post('/', async (req, res) => {
     }
 
     // Create document
-    const [doc] = await db
+    const [doc] = await db()
       .insert(documents)
       .values({
         fileName,
@@ -109,7 +109,7 @@ documentsRouter.put('/:id', async (req, res) => {
     const { id } = req.params;
     const { fileName, version, status, content, metadata } = req.body;
 
-    const [updated] = await db
+    const [updated] = await db()
       .update(documents)
       .set({
         ...(fileName && { fileName }),
@@ -138,7 +138,7 @@ documentsRouter.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [deleted] = await db
+    const [deleted] = await db()
       .delete(documents)
       .where(eq(documents.id, id))
       .returning();
@@ -160,7 +160,7 @@ documentsRouter.post('/:documentId/sections', async (req, res) => {
     const { documentId } = req.params;
     const { sectionType, title, position } = req.body;
 
-    const [section] = await db
+    const [section] = await db()
       .insert(documentSections)
       .values({
         documentId,
@@ -187,7 +187,7 @@ documentsRouter.post('/:documentId/sections/:sectionId/blocks', async (req, res)
     const text = JSON.stringify(content);
     const wordCount = text.split(/\s+/).filter(Boolean).length;
 
-    const [block] = await db
+    const [block] = await db()
       .insert(documentBlocks)
       .values({
         documentId,
@@ -218,7 +218,7 @@ documentsRouter.put('/blocks/:blockId', async (req, res) => {
     const text = JSON.stringify(content);
     const wordCount = text.split(/\s+/).filter(Boolean).length;
 
-    const [updated] = await db
+    const [updated] = await db()
       .update(documentBlocks)
       .set({
         content,
