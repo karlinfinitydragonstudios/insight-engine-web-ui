@@ -9,8 +9,24 @@ interface ActiveDocument {
   hasUnsavedChanges: boolean;
 }
 
+interface DocumentListItem {
+  id: string;
+  fileName: string;
+  version: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface DocumentList {
+  documents: DocumentListItem[];
+  isLoading: boolean;
+  error: string | null;
+}
+
 interface DocumentState {
   activeDocument: ActiveDocument;
+  documentList: DocumentList;
   blockLocks: BlockLock[];
   recentDocuments: { id: string; fileName: string; accessedAt: string }[];
 
@@ -18,6 +34,11 @@ interface DocumentState {
   setDocument: (document: Document | null) => void;
   setLoading: (isLoading: boolean) => void;
   setError: (error: string | null) => void;
+  setDocumentList: (documents: DocumentListItem[]) => void;
+  setDocumentListLoading: (isLoading: boolean) => void;
+  setDocumentListError: (error: string | null) => void;
+  addToDocumentList: (doc: DocumentListItem) => void;
+  removeFromDocumentList: (id: string) => void;
   updateBlock: (blockId: string, content: Record<string, unknown>) => void;
   updateSection: (sectionId: string, updates: Partial<Section>) => void;
   setBlockLocks: (locks: BlockLock[]) => void;
@@ -37,8 +58,64 @@ export const useDocumentStore = create<DocumentState>()(
         error: null,
         hasUnsavedChanges: false,
       },
+      documentList: {
+        documents: [],
+        isLoading: false,
+        error: null,
+      },
       blockLocks: [],
       recentDocuments: [],
+
+      setDocumentList: (documents) =>
+        set(
+          (state) => ({
+            documentList: { ...state.documentList, documents, isLoading: false, error: null },
+          }),
+          false,
+          'setDocumentList'
+        ),
+
+      setDocumentListLoading: (isLoading) =>
+        set(
+          (state) => ({
+            documentList: { ...state.documentList, isLoading },
+          }),
+          false,
+          'setDocumentListLoading'
+        ),
+
+      setDocumentListError: (error) =>
+        set(
+          (state) => ({
+            documentList: { ...state.documentList, error, isLoading: false },
+          }),
+          false,
+          'setDocumentListError'
+        ),
+
+      addToDocumentList: (doc) =>
+        set(
+          (state) => ({
+            documentList: {
+              ...state.documentList,
+              documents: [doc, ...state.documentList.documents],
+            },
+          }),
+          false,
+          'addToDocumentList'
+        ),
+
+      removeFromDocumentList: (id) =>
+        set(
+          (state) => ({
+            documentList: {
+              ...state.documentList,
+              documents: state.documentList.documents.filter((d) => d.id !== id),
+            },
+          }),
+          false,
+          'removeFromDocumentList'
+        ),
 
       setDocument: (document) =>
         set(

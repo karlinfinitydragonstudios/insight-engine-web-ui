@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useAppStore, SessionListItem } from '../../store/appStore';
-import { v4 as uuidv4 } from 'uuid';
+import { useDocumentStore } from '../../store/documentStore';
+import { FileText, ChevronDown, ChevronRight, Trash2, Plus } from 'lucide-react';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -19,12 +20,31 @@ export function SessionSidebar() {
     setSessionId,
   } = useAppStore();
 
+  const {
+    activeDocument,
+    documentList,
+    setDocument,
+    setDocumentList,
+    setDocumentListLoading,
+    setDocumentListError,
+    removeFromDocumentList,
+    addToDocumentList,
+    setLoading: setDocLoading,
+    setError: setDocError,
+  } = useDocumentStore();
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [documentsExpanded, setDocumentsExpanded] = useState(true);
+  const [chatsExpanded, setChatsExpanded] = useState(true);
+  const [showNewDocDialog, setShowNewDocDialog] = useState(false);
+  const [newDocName, setNewDocName] = useState('');
+  const [isCreatingDoc, setIsCreatingDoc] = useState(false);
 
   // Fetch sessions on mount
   useEffect(() => {
     fetchSessions();
+    fetchDocuments();
   }, []);
 
   const fetchSessions = async () => {
@@ -48,6 +68,86 @@ export function SessionSidebar() {
       }
     } catch (error) {
       setSessionsError(error instanceof Error ? error.message : 'Unknown error');
+    }
+  };
+
+  const fetchDocuments = async () => {
+    setDocumentListLoading(true);
+    try {
+      const res = await fetch('/api/documents');
+      if (!res.ok) throw new Error('Failed to fetch documents');
+      const data = await res.json();
+      setDocumentList(data);
+    } catch (error) {
+      setDocumentListError(error instanceof Error ? error.message : 'Unknown error');
+    }
+  };
+
+  const handleSelectDocument = async (docId: string) => {
+    setDocLoading(true);
+    try {
+      const res = await fetch(`/api/documents/${docId}`);
+      if (!res.ok) throw new Error('Failed to load document');
+      const data = await res.json();
+      setDocument(data);
+    } catch (error) {
+      setDocError(error instanceof Error ? error.message : 'Unknown error');
+    }
+  };
+
+  const handleDeleteDocument = async (docId: string) => {
+    try {
+      const res = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
+      if (res.ok) {
+        removeFromDocumentList(docId);
+        // If deleting current document, clear it
+        if (activeDocument.document?.id === docId) {
+          setDocument(null);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to delete document:', error);
+    }
+  };
+
+  const handleCreateDocument = async () => {
+    if (!newDocName.trim()) return;
+
+    setIsCreatingDoc(true);
+    try {
+      const response = await fetch('/api/documents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileName: newDocName.trim() }),
+      });
+
+      if (!response.ok) throw new Error('Failed to create document');
+
+      const newDoc = await response.json();
+
+      // Add to list
+      addToDocumentList({
+        id: newDoc.id,
+        fileName: newDoc.fileName,
+        version: newDoc.version || '1.0.0',
+        status: newDoc.status || 'draft',
+        createdAt: newDoc.createdAt,
+        updatedAt: newDoc.updatedAt,
+      });
+
+      // Fetch and select the full document
+      const fullResponse = await fetch(`/api/documents/${newDoc.id}`);
+      if (fullResponse.ok) {
+        const fullDoc = await fullResponse.json();
+        setDocument(fullDoc);
+      }
+
+      setShowNewDocDialog(false);
+      setNewDocName('');
+    } catch (err) {
+      console.error('Failed to create document:', err);
+    } finally {
+      setIsCreatingDoc(false);
     }
   };
 
@@ -155,117 +255,219 @@ export function SessionSidebar() {
     >
       {/* Header */}
       <div className="flex items-center justify-between p-3 border-b border-border">
-        <h2 className="text-sm font-semibold text-text-primary">Chats</h2>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={handleNewChat}
-            className="p-1.5 rounded hover:bg-background text-text-secondary hover:text-accent transition-colors"
-            title="New Chat"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-          </button>
-          <button
-            onClick={toggleSidebar}
-            className="p-1.5 rounded hover:bg-background text-text-secondary hover:text-text-primary transition-colors"
-            title="Close sidebar"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-            </svg>
-          </button>
+        <h2 className="text-sm font-semibold text-text-primary">Workspace</h2>
+        <button
+          onClick={toggleSidebar}
+          className="p-1.5 rounded hover:bg-background text-text-secondary hover:text-text-primary transition-colors"
+          title="Close sidebar"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+          </svg>
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {/* Documents Section */}
+        <div className="border-b border-border">
+          <div className="flex items-center justify-between px-3 py-2 text-sm font-medium text-text-primary">
+            <button
+              onClick={() => setDocumentsExpanded(!documentsExpanded)}
+              className="flex items-center gap-2 hover:text-accent transition-colors"
+            >
+              {documentsExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+              <FileText className="w-4 h-4" />
+              <span>Documents</span>
+            </button>
+            <button
+              onClick={() => setShowNewDocDialog(true)}
+              className="p-1 rounded hover:bg-surface text-text-muted hover:text-accent"
+              title="New Document"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {documentsExpanded && (
+            <div className="py-1">
+              {documentList.isLoading ? (
+                <div className="flex items-center justify-center p-4">
+                  <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : documentList.error ? (
+                <div className="px-3 py-2 text-xs text-red-400">{documentList.error}</div>
+              ) : documentList.documents.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-text-muted">No documents yet</div>
+              ) : (
+                documentList.documents.map((doc) => (
+                  <div
+                    key={doc.id}
+                    className={`
+                      group relative px-3 py-1.5 mx-2 rounded cursor-pointer text-sm
+                      transition-colors
+                      ${activeDocument.document?.id === doc.id
+                        ? 'bg-primary/20 text-primary'
+                        : 'hover:bg-background text-text-secondary hover:text-text-primary'}
+                    `}
+                    onClick={() => handleSelectDocument(doc.id)}
+                  >
+                    <div className="truncate pr-6">{doc.fileName}</div>
+                    <div className="text-xs text-text-muted">{formatDate(doc.updatedAt)}</div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm('Delete this document?')) {
+                          handleDeleteDocument(doc.id);
+                        }
+                      }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-surface text-text-muted hover:text-red-400 transition-opacity"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Chats Section */}
+        <div>
+          <div className="flex items-center justify-between px-3 py-2 text-sm font-medium text-text-primary">
+            <button
+              onClick={() => setChatsExpanded(!chatsExpanded)}
+              className="flex items-center gap-2 hover:text-accent transition-colors"
+            >
+              {chatsExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              <span>Chats</span>
+            </button>
+            <button
+              onClick={handleNewChat}
+              className="p-1 rounded hover:bg-surface text-text-muted hover:text-accent"
+              title="New Chat"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {chatsExpanded && (
+            <div className="py-1">
+              {sessionList.isLoading ? (
+                <div className="flex items-center justify-center p-4">
+                  <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : sessionList.error ? (
+                <div className="px-3 py-2 text-xs text-red-400">{sessionList.error}</div>
+              ) : sessionList.sessions.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-text-muted">No chats yet</div>
+              ) : (
+                sessionList.sessions.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`
+                      group relative px-3 py-1.5 mx-2 rounded cursor-pointer text-sm
+                      transition-colors
+                      ${session.sessionId === s.id
+                        ? 'bg-primary/20 text-primary'
+                        : 'hover:bg-background text-text-secondary hover:text-text-primary'}
+                    `}
+                    onClick={() => handleSelectSession(s.id)}
+                  >
+                    {editingId === s.id ? (
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        onBlur={() => handleSaveTitle(s.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleSaveTitle(s.id);
+                          if (e.key === 'Escape') setEditingId(null);
+                        }}
+                        className="w-full bg-background border border-border rounded px-2 py-1 text-sm text-text-primary focus:outline-none focus:border-accent"
+                        autoFocus
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <>
+                        <div className="truncate pr-12">{s.title}</div>
+                        <div className="text-xs text-text-muted">{formatDate(s.lastActivityAt)}</div>
+
+                        {/* Action buttons */}
+                        <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleStartEdit(s);
+                            }}
+                            className="p-1 rounded hover:bg-surface text-text-muted hover:text-text-primary"
+                            title="Rename"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm('Delete this conversation?')) {
+                                handleDeleteSession(s.id);
+                              }
+                            }}
+                            className="p-1 rounded hover:bg-surface text-text-muted hover:text-red-400"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Session List */}
-      <div className="flex-1 overflow-y-auto">
-        {sessionList.isLoading ? (
-          <div className="flex items-center justify-center p-4">
-            <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : sessionList.error ? (
-          <div className="p-4 text-sm text-red-400">{sessionList.error}</div>
-        ) : sessionList.sessions.length === 0 ? (
-          <div className="p-4 text-sm text-text-muted text-center">
-            No conversations yet.
-            <br />
-            <button
-              onClick={handleNewChat}
-              className="text-accent hover:underline mt-2"
-            >
-              Start a new chat
-            </button>
-          </div>
-        ) : (
-          <div className="py-2">
-            {sessionList.sessions.map((s) => (
-              <div
-                key={s.id}
-                className={`
-                  group relative px-3 py-2 mx-2 rounded cursor-pointer
-                  transition-colors
-                  ${session.sessionId === s.id
-                    ? 'bg-accent/20 text-accent'
-                    : 'hover:bg-background text-text-secondary hover:text-text-primary'}
-                `}
-                onClick={() => handleSelectSession(s.id)}
+      {/* New Document Dialog */}
+      {showNewDocDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-background border border-border rounded-lg p-6 w-full max-w-md shadow-xl">
+            <h2 className="text-lg font-semibold mb-4">Create New Document</h2>
+            <input
+              type="text"
+              value={newDocName}
+              onChange={(e) => setNewDocName(e.target.value)}
+              placeholder="Document name..."
+              className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary mb-4"
+              autoFocus
+              onKeyDown={(e) => e.key === 'Enter' && handleCreateDocument()}
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setShowNewDocDialog(false);
+                  setNewDocName('');
+                }}
+                className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
               >
-                {editingId === s.id ? (
-                  <input
-                    type="text"
-                    value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    onBlur={() => handleSaveTitle(s.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleSaveTitle(s.id);
-                      if (e.key === 'Escape') setEditingId(null);
-                    }}
-                    className="w-full bg-background border border-border rounded px-2 py-1 text-sm text-text-primary focus:outline-none focus:border-accent"
-                    autoFocus
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                ) : (
-                  <>
-                    <div className="text-sm font-medium truncate pr-12">{s.title}</div>
-                    <div className="text-xs text-text-muted mt-0.5">{formatDate(s.lastActivityAt)}</div>
-
-                    {/* Action buttons */}
-                    <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleStartEdit(s);
-                        }}
-                        className="p-1 rounded hover:bg-surface text-text-muted hover:text-text-primary"
-                        title="Rename"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (confirm('Delete this conversation?')) {
-                            handleDeleteSession(s.id);
-                          }
-                        }}
-                        className="p-1 rounded hover:bg-surface text-text-muted hover:text-red-400"
-                        title="Delete"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateDocument}
+                disabled={!newDocName.trim() || isCreatingDoc}
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
+                {isCreatingDoc ? 'Creating...' : 'Create'}
+              </button>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

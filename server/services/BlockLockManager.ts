@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events';
 import { db } from '../config/database';
 import { blockLocks } from '../db/schema';
 import { eq, and, lt, inArray } from 'drizzle-orm';
@@ -24,8 +25,19 @@ export interface LockResult {
   denied: { blockId: string; heldBy: string }[];
 }
 
-export class BlockLockManager {
+// Events emitted by BlockLockManager
+export interface BlockLockEvents {
+  'lock:acquired': (lock: BlockLock) => void;
+  'lock:released': (blockId: string, lockedBy: string) => void;
+  'lock:expired': (lock: BlockLock) => void;
+  'lock:timeout_warning': (lock: BlockLock, expiresIn: number) => void;
+}
+
+export class BlockLockManager extends EventEmitter {
   private readonly DEFAULT_LOCK_TIMEOUT = 30_000; // 30 seconds
+  private readonly TIMEOUT_WARNING_THRESHOLD = 5_000; // 5 seconds before expiry
+  private watchdogInterval: NodeJS.Timeout | null = null;
+  private watchdogRunning: boolean = false;
 
   /**
    * Attempt to acquire exclusive locks on blocks.
@@ -181,4 +193,144 @@ export class BlockLockManager {
 
     return { locked: false };
   }
+
+  /**
+   * Start the timeout watchdog
+   * Monitors locks and emits warnings/expirations
+   */
+  startWatchdog(intervalMs: number = 1000): void {
+    if (this.watchdogRunning) return;
+
+    this.watchdogRunning = true;
+    this.watchdogInterval = setInterval(async () => {
+      await this.checkLockTimeouts();
+    }, intervalMs);
+
+    console.log('[BlockLockManager] Watchdog started');
+  }
+
+  /**
+   * Stop the timeout watchdog
+   */
+  stopWatchdog(): void {
+    if (this.watchdogInterval) {
+      clearInterval(this.watchdogInterval);
+      this.watchdogInterval = null;
+    }
+    this.watchdogRunning = false;
+    console.log('[BlockLockManager] Watchdog stopped');
+  }
+
+  /**
+   * Check for locks that are about to expire or have expired
+   */
+  private async checkLockTimeouts(): Promise<void> {
+    try {
+      const now = new Date();
+      const warningThreshold = new Date(now.getTime() + this.TIMEOUT_WARNING_THRESHOLD);
+
+      // Get all current locks
+      const locks = await db()
+        .select()
+        .from(blockLocks);
+
+      for (const lock of locks) {
+        const expiresAt = new Date(lock.expiresAt);
+
+        // Check if expired
+        if (expiresAt <= now) {
+          // Delete expired lock
+          await db()
+            .delete(blockLocks)
+            .where(eq(blockLocks.id, lock.id));
+
+          this.emit('lock:expired', {
+            blockId: lock.blockId,
+            documentId: lock.documentId,
+            sessionId: lock.sessionId,
+            lockedBy: lock.lockedBy,
+            acquiredAt: lock.acquiredAt,
+            expiresAt: lock.expiresAt,
+          });
+        }
+        // Check if about to expire
+        else if (expiresAt <= warningThreshold) {
+          const expiresIn = expiresAt.getTime() - now.getTime();
+          this.emit('lock:timeout_warning', {
+            blockId: lock.blockId,
+            documentId: lock.documentId,
+            sessionId: lock.sessionId,
+            lockedBy: lock.lockedBy,
+            acquiredAt: lock.acquiredAt,
+            expiresAt: lock.expiresAt,
+          }, expiresIn);
+        }
+      }
+    } catch (error) {
+      console.error('[BlockLockManager] Watchdog error:', error);
+    }
+  }
+
+  /**
+   * Force release a lock (admin/cleanup)
+   */
+  async forceReleaseLock(blockId: string): Promise<void> {
+    const [lock] = await db()
+      .select()
+      .from(blockLocks)
+      .where(eq(blockLocks.blockId, blockId))
+      .limit(1);
+
+    if (lock) {
+      await db()
+        .delete(blockLocks)
+        .where(eq(blockLocks.blockId, blockId));
+
+      this.emit('lock:released', blockId, lock.lockedBy);
+    }
+  }
+
+  /**
+   * Get lock statistics for monitoring
+   */
+  async getLockStats(): Promise<{
+    totalLocks: number;
+    locksByPipeline: Record<string, number>;
+    expiringWithin5Seconds: number;
+    averageLockAge: number;
+  }> {
+    const now = new Date();
+    const warningThreshold = new Date(now.getTime() + 5000);
+
+    const locks = await db()
+      .select()
+      .from(blockLocks);
+
+    const locksByPipeline: Record<string, number> = {};
+    let totalAge = 0;
+    let expiringCount = 0;
+
+    for (const lock of locks) {
+      // Count by pipeline
+      locksByPipeline[lock.lockedBy] = (locksByPipeline[lock.lockedBy] || 0) + 1;
+
+      // Calculate age
+      totalAge += now.getTime() - new Date(lock.acquiredAt).getTime();
+
+      // Check if expiring soon
+      if (new Date(lock.expiresAt) <= warningThreshold) {
+        expiringCount++;
+      }
+    }
+
+    return {
+      totalLocks: locks.length,
+      locksByPipeline,
+      expiringWithin5Seconds: expiringCount,
+      averageLockAge: locks.length > 0 ? totalAge / locks.length : 0,
+    };
+  }
 }
+
+// Singleton instance
+export const blockLockManager = new BlockLockManager();

@@ -1,7 +1,8 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { v4 as uuidv4 } from 'uuid';
-import { BlockLockManager } from '../services/BlockLockManager';
+import { BlockLockManager, blockLockManager } from '../services/BlockLockManager';
 import { PipelineOrchestrator } from '../services/PipelineOrchestrator';
+import { editIntentManager, EditIntent } from '../services/EditIntentManager';
 
 interface ClientConnection {
   ws: WebSocket;
@@ -16,6 +17,29 @@ interface WebSocketMessage {
   payload?: Record<string, unknown>;
 }
 
+// New message types for edit intents and streaming
+export type OutgoingMessageType =
+  | 'connected'
+  | 'error'
+  | 'pong'
+  | 'subscribed'
+  | 'unsubscribed'
+  | 'lock_result'
+  | 'locks_changed'
+  | 'locks_released'
+  | 'pipeline_control_ack'
+  | 'block_update'
+  // New types for edit intents and streaming
+  | 'edit_intent_declared'
+  | 'lock_queued'
+  | 'lock_granted'
+  | 'block_streaming_start'
+  | 'block_content_chunk'
+  | 'block_streaming_end'
+  | 'edit_validation_result'
+  | 'lock_timeout_warning'
+  | 'lock_expired';
+
 export class WebSocketHandler {
   private wss: WebSocketServer;
   private clients: Map<string, ClientConnection> = new Map();
@@ -24,8 +48,117 @@ export class WebSocketHandler {
 
   constructor(wss: WebSocketServer) {
     this.wss = wss;
-    this.blockLockManager = new BlockLockManager();
+    this.blockLockManager = blockLockManager;
     this.pipelineOrchestrator = new PipelineOrchestrator(this.blockLockManager);
+
+    // Set up edit intent event handlers
+    this.setupEditIntentHandlers();
+
+    // Set up block lock event handlers
+    this.setupBlockLockHandlers();
+  }
+
+  /**
+   * Set up handlers for edit intent events
+   */
+  private setupEditIntentHandlers(): void {
+    editIntentManager.on('intent:declared', (intent: EditIntent) => {
+      this.broadcastToDocument(intent.documentId, {
+        type: 'edit_intent_declared',
+        payload: {
+          intentId: intent.id,
+          blockId: intent.blockId,
+          sectionId: intent.sectionId,
+          pipelineName: intent.pipelineName,
+          priority: intent.priority,
+        },
+      });
+    });
+
+    editIntentManager.on('intent:queued', (intent: EditIntent, position: number) => {
+      this.broadcastToDocument(intent.documentId, {
+        type: 'lock_queued',
+        payload: {
+          intentId: intent.id,
+          blockId: intent.blockId,
+          pipelineName: intent.pipelineName,
+          position,
+        },
+      });
+    });
+
+    editIntentManager.on('intent:granted', (intent: EditIntent) => {
+      this.broadcastToDocument(intent.documentId, {
+        type: 'lock_granted',
+        payload: {
+          intentId: intent.id,
+          blockId: intent.blockId,
+          pipelineName: intent.pipelineName,
+        },
+      });
+    });
+
+    editIntentManager.on('intent:completed', (intent: EditIntent) => {
+      this.broadcastToDocument(intent.documentId, {
+        type: 'block_streaming_end',
+        payload: {
+          intentId: intent.id,
+          blockId: intent.blockId,
+          pipelineName: intent.pipelineName,
+        },
+      });
+    });
+
+    editIntentManager.on('intent:cancelled', (intent: EditIntent, reason: string) => {
+      this.broadcastToDocument(intent.documentId, {
+        type: 'error',
+        payload: {
+          intentId: intent.id,
+          blockId: intent.blockId,
+          pipelineName: intent.pipelineName,
+          message: `Edit cancelled: ${reason}`,
+        },
+      });
+    });
+  }
+
+  /**
+   * Set up handlers for block lock events
+   */
+  private setupBlockLockHandlers(): void {
+    this.blockLockManager.on('lock:timeout_warning', (lock, expiresIn) => {
+      this.broadcastToDocument(lock.documentId, {
+        type: 'lock_timeout_warning',
+        payload: {
+          blockId: lock.blockId,
+          lockedBy: lock.lockedBy,
+          expiresIn,
+        },
+      });
+    });
+
+    this.blockLockManager.on('lock:expired', (lock) => {
+      this.broadcastToDocument(lock.documentId, {
+        type: 'lock_expired',
+        payload: {
+          blockId: lock.blockId,
+          lockedBy: lock.lockedBy,
+        },
+      });
+    });
+
+    this.blockLockManager.on('lock:released', (blockId, lockedBy) => {
+      // We need documentId here - broadcast to all documents for now
+      // In production, you'd track blockId -> documentId mapping
+      this.clients.forEach((client) => {
+        if (client.documentId) {
+          this.send(client.ws, {
+            type: 'locks_released',
+            payload: { blockIds: [blockId], lockedBy },
+          });
+        }
+      });
+    });
   }
 
   initialize() {

@@ -1,7 +1,9 @@
 import { useCallback, useEffect } from 'react';
 import { useWebSocket } from './useWebSocket';
 import { usePipelineStore, useDocumentStore, useChatStore } from '../store';
+import { useEditIntentStore } from '../store/editIntentStore';
 import type { PipelineState } from '../types/pipeline';
+import type { PipelineName } from '../types/directive';
 
 interface UseStreamingAnalysisReturn {
   startAnalysis: (documentId: string, query: string) => void;
@@ -14,6 +16,18 @@ export function useStreamingAnalysis(): UseStreamingAnalysisReturn {
   const { setPipeline, updatePipelineProgress, completePipeline, setError, clearPipelines } = usePipelineStore();
   const { updateBlock, setBlockLock, removeBlockLock } = useDocumentStore();
   const { addMessage, updateStreamingContent, setIsStreaming } = useChatStore();
+  const {
+    declareIntent,
+    removeIntent,
+    addToQueue,
+    removeFromQueue,
+    startStreaming,
+    appendStreamingContent: appendBlockContent,
+    completeStreaming,
+    cancelStreaming,
+    setTimeoutWarning,
+    clearTimeoutWarning,
+  } = useEditIntentStore();
 
   // Handle analysis_started event
   useEffect(() => {
@@ -196,6 +210,161 @@ export function useStreamingAnalysis(): UseStreamingAnalysisReturn {
       }
     });
   }, [subscribe, removeBlockLock]);
+
+  // =====================================================
+  // New handlers for edit intents and block streaming
+  // =====================================================
+
+  // Handle edit intent declared by a pipeline
+  useEffect(() => {
+    return subscribe('edit_intent_declared', (message) => {
+      const { payload } = message;
+      if (payload) {
+        const { intentId, blockId, sectionId, pipelineName, priority } = payload as {
+          intentId: string;
+          blockId: string;
+          sectionId: string;
+          pipelineName: PipelineName;
+          priority: number;
+        };
+        declareIntent({
+          pipelineName,
+          blockId,
+          sectionId,
+          priority,
+          affinityScore: 0, // Server will provide this
+          timestamp: Date.now(),
+        });
+      }
+    });
+  }, [subscribe, declareIntent]);
+
+  // Handle lock queued (pipeline waiting for lock)
+  useEffect(() => {
+    return subscribe('lock_queued', (message) => {
+      const { payload } = message;
+      if (payload) {
+        const { intentId, blockId, pipelineName, position } = payload as {
+          intentId: string;
+          blockId: string;
+          pipelineName: PipelineName;
+          position: number;
+        };
+        addToQueue({
+          intent: {
+            pipelineName,
+            blockId,
+            sectionId: '', // Will be filled from declared intent
+            priority: 0,
+            affinityScore: 0,
+            timestamp: Date.now(),
+          },
+          position,
+          estimatedWaitMs: position * 5000, // Rough estimate
+        });
+      }
+    });
+  }, [subscribe, addToQueue]);
+
+  // Handle lock granted to a pipeline
+  useEffect(() => {
+    return subscribe('lock_granted', (message) => {
+      const { payload } = message;
+      if (payload) {
+        const { intentId, blockId, pipelineName } = payload as {
+          intentId: string;
+          blockId: string;
+          pipelineName: PipelineName;
+        };
+        removeFromQueue(blockId);
+        startStreaming(blockId, pipelineName);
+      }
+    });
+  }, [subscribe, removeFromQueue, startStreaming]);
+
+  // Handle block streaming start
+  useEffect(() => {
+    return subscribe('block_streaming_start', (message) => {
+      const { payload } = message;
+      if (payload) {
+        const { blockId, pipelineName } = payload as {
+          blockId: string;
+          pipelineName: PipelineName;
+        };
+        startStreaming(blockId, pipelineName);
+      }
+    });
+  }, [subscribe, startStreaming]);
+
+  // Handle block content chunk (streaming content into a block)
+  useEffect(() => {
+    return subscribe('block_content_chunk', (message) => {
+      const { payload } = message;
+      if (payload) {
+        const { blockId, content, isComplete } = payload as {
+          blockId: string;
+          content: string;
+          isComplete: boolean;
+        };
+        appendBlockContent(blockId, content);
+        if (isComplete) {
+          completeStreaming(blockId);
+        }
+      }
+    });
+  }, [subscribe, appendBlockContent, completeStreaming]);
+
+  // Handle block streaming end
+  useEffect(() => {
+    return subscribe('block_streaming_end', (message) => {
+      const { payload } = message;
+      if (payload) {
+        const { blockId, finalContent } = payload as {
+          blockId: string;
+          pipelineName: string;
+          finalContent?: Record<string, unknown>;
+        };
+        completeStreaming(blockId);
+        removeIntent(blockId);
+
+        // Update block with final content if provided
+        if (finalContent) {
+          updateBlock(blockId, finalContent);
+        }
+      }
+    });
+  }, [subscribe, completeStreaming, removeIntent, updateBlock]);
+
+  // Handle lock timeout warning
+  useEffect(() => {
+    return subscribe('lock_timeout_warning', (message) => {
+      const { payload } = message;
+      if (payload) {
+        const { blockId, expiresIn } = payload as {
+          blockId: string;
+          lockedBy: string;
+          expiresIn: number;
+        };
+        setTimeoutWarning(blockId, Math.ceil(expiresIn / 1000));
+      }
+    });
+  }, [subscribe, setTimeoutWarning]);
+
+  // Handle lock expired
+  useEffect(() => {
+    return subscribe('lock_expired', (message) => {
+      const { payload } = message;
+      if (payload) {
+        const { blockId } = payload as {
+          blockId: string;
+          lockedBy: string;
+        };
+        cancelStreaming(blockId);
+        clearTimeoutWarning(blockId);
+        removeBlockLock(blockId);
+      }
+    });
+  }, [subscribe, cancelStreaming, clearTimeoutWarning, removeBlockLock]);
 
   const startAnalysis = useCallback(
     (documentId: string, query: string) => {

@@ -69,6 +69,7 @@ export const documentSections = pgTable('document_sections', {
   sectionType: varchar('section_type', { length: 50 }).notNull(),
   title: varchar('title', { length: 255 }),
   position: integer('position').notNull(),
+  directives: jsonb('directives').default({}).notNull(), // Template directives for this section
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
@@ -83,6 +84,7 @@ export const documentBlocks = pgTable('document_blocks', {
   blockType: varchar('block_type', { length: 50 }).notNull(),
   position: integer('position').notNull(),
   content: jsonb('content').notNull(),
+  directives: jsonb('directives').default({}).notNull(), // Template directives for this block
   entities: jsonb('entities').default([]).notNull(),
   relationships: jsonb('relationships').default([]).notNull(),
   wordCount: integer('word_count').default(0).notNull(),
