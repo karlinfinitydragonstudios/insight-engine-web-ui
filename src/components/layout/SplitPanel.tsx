@@ -64,7 +64,7 @@ export function SplitPanel({
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   return (
-    <div ref={containerRef} className="flex-1 flex overflow-hidden">
+    <div ref={containerRef} className="h-full flex overflow-hidden">
       {/* Left Panel */}
       <div
         className="h-full overflow-hidden"

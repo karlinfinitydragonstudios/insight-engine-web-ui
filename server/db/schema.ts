@@ -41,6 +41,7 @@ export const oauthTokens = pgTable('oauth_tokens', {
 export const sessions = pgTable('sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 255 }).default('New Chat').notNull(),
   status: varchar('status', { length: 20 }).default('active').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   lastActivityAt: timestamp('last_activity_at').defaultNow().notNull(),

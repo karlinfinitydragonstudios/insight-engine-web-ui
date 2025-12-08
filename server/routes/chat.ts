@@ -19,9 +19,10 @@ async function ensureSession(sessionId: string): Promise<boolean> {
       .limit(1);
 
     if (!existing) {
-      // Create new session
+      // Create new session with default title
       await db().insert(sessions).values({
         id: sessionId,
+        title: 'New Chat',
         status: 'active',
         metadata: {},
       });

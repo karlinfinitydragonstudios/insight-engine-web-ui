@@ -1,16 +1,38 @@
 import { Router } from 'express';
 import { db } from '../config/database';
 import { sessions } from '../db/schema';
-import { eq, lt } from 'drizzle-orm';
+import { eq, lt, desc, ne } from 'drizzle-orm';
 
 export const sessionsRouter = Router();
 
 const SESSION_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
 
+// List all sessions (for sidebar)
+sessionsRouter.get('/', async (req, res) => {
+  try {
+    const allSessions = await db()
+      .select({
+        id: sessions.id,
+        title: sessions.title,
+        status: sessions.status,
+        createdAt: sessions.createdAt,
+        lastActivityAt: sessions.lastActivityAt,
+      })
+      .from(sessions)
+      .where(ne(sessions.status, 'terminated'))
+      .orderBy(desc(sessions.lastActivityAt));
+
+    res.json(allSessions);
+  } catch (error) {
+    console.error('List sessions error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Create session
 sessionsRouter.post('/', async (req, res) => {
   try {
-    const { userId, metadata } = req.body;
+    const { userId, title, metadata } = req.body;
 
     const expiresAt = new Date(Date.now() + SESSION_TIMEOUT_MS);
 
@@ -18,6 +40,7 @@ sessionsRouter.post('/', async (req, res) => {
       .insert(sessions)
       .values({
         userId,
+        title: title || 'New Chat',
         status: 'active',
         expiresAt,
         metadata: metadata || {},
@@ -26,6 +49,7 @@ sessionsRouter.post('/', async (req, res) => {
 
     res.status(201).json({
       sessionId: session.id,
+      title: session.title,
       expiresAt: session.expiresAt,
     });
   } catch (error) {
@@ -136,6 +160,33 @@ sessionsRouter.post('/:id/restore', async (req, res) => {
     });
   } catch (error) {
     console.error('Restore session error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update session title
+sessionsRouter.patch('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title } = req.body;
+
+    if (!title) {
+      return res.status(400).json({ error: 'Title is required' });
+    }
+
+    const [updated] = await db()
+      .update(sessions)
+      .set({ title })
+      .where(eq(sessions.id, id))
+      .returning();
+
+    if (!updated) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Update session error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

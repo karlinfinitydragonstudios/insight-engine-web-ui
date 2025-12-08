@@ -2,18 +2,50 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Paperclip, Mic } from 'lucide-react';
 import { ChatMessage } from './ChatMessage';
 import { useChatStore, usePipelineStore, useAppStore } from '../../store';
+import { SessionListItem } from '../../store/appStore';
 import { cn } from '../../lib/utils';
 import { v4 as uuidv4 } from 'uuid';
 
 const API_URL = 'http://localhost:8000';
 
 export function ChatPanel() {
-  const { messages, isLoading, streamingMessageId, addMessage, setLoading, setStreamingMessage, appendToMessage } = useChatStore();
+  const { messages, isLoading, streamingMessageId, addMessage, setLoading, setStreamingMessage, appendToMessage, clearMessages, setMessages } = useChatStore();
   const { isAnalyzing } = usePipelineStore();
-  const { session } = useAppStore();
+  const { session, sessionList, updateSessionTitle, setSessionId, addSession } = useAppStore();
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previousSessionId = useRef<string | null>(null);
+
+  // Load messages when sessionId changes
+  useEffect(() => {
+    if (session.sessionId && session.sessionId !== previousSessionId.current) {
+      previousSessionId.current = session.sessionId;
+      clearMessages();
+      loadMessages(session.sessionId);
+    }
+  }, [session.sessionId, clearMessages]);
+
+  const loadMessages = async (sessionId: string) => {
+    try {
+      const res = await fetch(`${API_URL}/api/chat/${sessionId}/history`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.messages && data.messages.length > 0) {
+          setMessages(data.messages.map((msg: any) => ({
+            id: msg.id,
+            sessionId: msg.sessionId,
+            role: msg.role,
+            content: msg.content,
+            timestamp: msg.createdAt,
+            documentReferences: msg.documentReferences || [],
+          })));
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load messages:', error);
+    }
+  };
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -31,14 +63,66 @@ export function ChatPanel() {
     }
   }, [input]);
 
+  // Generate title from first message
+  const generateTitle = useCallback(async (sessionId: string, content: string) => {
+    // Create a short title from the first message
+    const title = content.length > 30 ? content.substring(0, 30) + '...' : content;
+
+    try {
+      const res = await fetch(`${API_URL}/api/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+
+      if (res.ok) {
+        updateSessionTitle(sessionId, title);
+      }
+    } catch (error) {
+      console.error('Failed to update session title:', error);
+    }
+  }, [updateSessionTitle]);
+
   const sendMessage = useCallback(async (content: string) => {
-    // Create a temporary session ID if not connected
-    const sessionId = session.sessionId || uuidv4();
+    let sessionId = session.sessionId;
+    const isFirstMessage = messages.length === 0;
+
+    // Create session via API if none exists
+    if (!sessionId) {
+      try {
+        const res = await fetch(`${API_URL}/api/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'New Chat', metadata: {} }),
+        });
+        if (!res.ok) {
+          console.error('Failed to create session');
+          return;
+        }
+        const data = await res.json();
+        sessionId = data.sessionId as string;
+        const newSession: SessionListItem = {
+          id: data.sessionId,
+          title: data.title || 'New Chat',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          lastActivityAt: new Date().toISOString(),
+        };
+        addSession(newSession);
+        setSessionId(data.sessionId);
+      } catch (error) {
+        console.error('Failed to create session:', error);
+        return;
+      }
+    }
+
+    // At this point sessionId is guaranteed to be a string
+    const currentSessionId = sessionId as string;
 
     // Add user message to UI immediately
     const userMessage = {
       id: uuidv4(),
-      sessionId,
+      sessionId: currentSessionId,
       role: 'user' as const,
       content,
       timestamp: new Date().toISOString(),
@@ -51,7 +135,7 @@ export function ChatPanel() {
     const assistantMessageId = uuidv4();
     const assistantMessage = {
       id: assistantMessageId,
-      sessionId,
+      sessionId: currentSessionId,
       role: 'assistant' as const,
       content: '',
       timestamp: new Date().toISOString(),
@@ -60,8 +144,13 @@ export function ChatPanel() {
     addMessage(assistantMessage);
     setStreamingMessage(assistantMessageId);
 
+    // Generate title from first message
+    if (isFirstMessage) {
+      generateTitle(currentSessionId, content);
+    }
+
     try {
-      const response = await fetch(`${API_URL}/api/chat/${sessionId}/send`, {
+      const response = await fetch(`${API_URL}/api/chat/${currentSessionId}/send`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -115,7 +204,7 @@ export function ChatPanel() {
       setStreamingMessage(null);
       setLoading(false);
     }
-  }, [session.sessionId, addMessage, setLoading, setStreamingMessage, appendToMessage]);
+  }, [session.sessionId, messages.length, addMessage, setLoading, setStreamingMessage, appendToMessage, generateTitle, addSession, setSessionId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -133,12 +222,18 @@ export function ChatPanel() {
     }
   };
 
+  // Get current session title
+  const currentSession = sessionList.sessions.find(s => s.id === session.sessionId);
+  const sessionTitle = currentSession?.title || 'New Chat';
+
   return (
     <div className="h-full flex flex-col bg-card">
       {/* Chat Header */}
       <div className="px-4 py-3 border-b border-border">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium text-foreground">Chat</h2>
+          <h2 className="text-sm font-medium text-foreground truncate" title={sessionTitle}>
+            {sessionTitle}
+          </h2>
           <div className="flex items-center gap-2">
             {isAnalyzing && (
               <span className="flex items-center gap-1 text-xs text-primary">
