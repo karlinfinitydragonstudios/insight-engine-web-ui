@@ -23,6 +23,7 @@ export type BlockType =
   | 'archetype_profile'
   | 'chart'
   | 'image'
+  | 'media'
   | 'callout'
   | 'competitor_analysis'
   | 'ab_test_result';

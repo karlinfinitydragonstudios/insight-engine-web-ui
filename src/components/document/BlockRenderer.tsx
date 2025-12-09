@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Info, AlertTriangle, CheckCircle, XCircle, Plus, X } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Info, AlertTriangle, CheckCircle, XCircle, Plus, X, Upload, Link, Image, Film, Play, Pause, Volume2, VolumeX, Maximize } from 'lucide-react';
 import type { Block } from '../../types';
 import { cn } from '../../lib/utils';
 
@@ -81,8 +81,9 @@ export function BlockRenderer({
         />
       );
     case 'image':
+    case 'media':
       return (
-        <ImageBlock
+        <MediaBlock
           block={block}
           isEditing={isEditing}
           onStartEdit={onStartEdit}
@@ -789,47 +790,392 @@ function CalloutBlock({ block, isEditing, onStartEdit, onEndEdit, onSave }: Edit
   );
 }
 
-// Image Block
-function ImageBlock({ block, isEditing, onStartEdit, onEndEdit, onSave }: EditableBlockProps) {
-  const content = block.content as { src?: string; alt?: string; caption?: string };
+// Media Block (Images and Videos)
+type MediaType = 'image' | 'video' | 'youtube' | 'vimeo';
+
+interface MediaContent {
+  src?: string;
+  alt?: string;
+  caption?: string;
+  mediaType?: MediaType;
+  thumbnailUrl?: string;
+}
+
+function getMediaType(url: string): MediaType {
+  if (!url) return 'image';
+
+  // Check for YouTube
+  if (url.includes('youtube.com') || url.includes('youtu.be')) {
+    return 'youtube';
+  }
+
+  // Check for Vimeo
+  if (url.includes('vimeo.com')) {
+    return 'vimeo';
+  }
+
+  // Check for video file extensions
+  const videoExtensions = ['.mp4', '.webm', '.ogg', '.mov', '.avi', '.mkv'];
+  const lowerUrl = url.toLowerCase();
+  if (videoExtensions.some(ext => lowerUrl.includes(ext))) {
+    return 'video';
+  }
+
+  return 'image';
+}
+
+function getYouTubeEmbedUrl(url: string): string {
+  // Handle various YouTube URL formats
+  let videoId = '';
+
+  if (url.includes('youtu.be/')) {
+    videoId = url.split('youtu.be/')[1]?.split(/[?&#]/)[0] || '';
+  } else if (url.includes('youtube.com/watch')) {
+    const urlParams = new URLSearchParams(url.split('?')[1]);
+    videoId = urlParams.get('v') || '';
+  } else if (url.includes('youtube.com/embed/')) {
+    videoId = url.split('youtube.com/embed/')[1]?.split(/[?&#]/)[0] || '';
+  }
+
+  return videoId ? `https://www.youtube.com/embed/${videoId}` : url;
+}
+
+function getVimeoEmbedUrl(url: string): string {
+  // Handle Vimeo URL formats
+  const vimeoIdMatch = url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  const videoId = vimeoIdMatch ? vimeoIdMatch[1] : '';
+  return videoId ? `https://player.vimeo.com/video/${videoId}` : url;
+}
+
+function MediaBlock({ block, isEditing, onStartEdit, onEndEdit, onSave }: EditableBlockProps) {
+  const content = block.content as MediaContent;
 
   const [src, setSrc] = useState(content.src || '');
   const [alt, setAlt] = useState(content.alt || '');
   const [caption, setCaption] = useState(content.caption || '');
+  const [mediaType, setMediaType] = useState<MediaType>(content.mediaType || getMediaType(content.src || ''));
+  const [isDragging, setIsDragging] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [inputMode, setInputMode] = useState<'url' | 'upload'>('url');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setSrc(content.src || '');
     setAlt(content.alt || '');
     setCaption(content.caption || '');
+    setMediaType(content.mediaType || getMediaType(content.src || ''));
   }, [content]);
+
+  // Auto-detect media type when URL changes
+  useEffect(() => {
+    if (src && inputMode === 'url') {
+      setMediaType(getMediaType(src));
+    }
+  }, [src, inputMode]);
 
   const handleSave = async () => {
     if (onSave) {
-      await onSave(block.id, { src, alt, caption });
+      await onSave(block.id, { src, alt, caption, mediaType });
     }
     onEndEdit();
   };
 
+  const handleFileSelect = useCallback((file: File) => {
+    if (!file) return;
+
+    // Determine media type from file
+    const isVideo = file.type.startsWith('video/');
+    const isImage = file.type.startsWith('image/');
+
+    if (!isVideo && !isImage) {
+      alert('Please select an image or video file');
+      return;
+    }
+
+    // Create a data URL for preview (in production, upload to server)
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result as string;
+      setSrc(result);
+      setMediaType(isVideo ? 'video' : 'image');
+      setAlt(file.name.replace(/\.[^/.]+$/, '')); // Use filename without extension as default alt
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  }, [handleFileSelect]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  };
+
+  const togglePlay = () => {
+    if (videoRef.current) {
+      if (isPlaying) {
+        videoRef.current.pause();
+      } else {
+        videoRef.current.play();
+      }
+      setIsPlaying(!isPlaying);
+    }
+  };
+
+  const toggleMute = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !isMuted;
+      setIsMuted(!isMuted);
+    }
+  };
+
+  const openFullscreen = () => {
+    if (videoRef.current) {
+      if (videoRef.current.requestFullscreen) {
+        videoRef.current.requestFullscreen();
+      }
+    }
+  };
+
+  // Render media preview based on type
+  const renderMediaPreview = (previewMode = false) => {
+    if (!src) return null;
+
+    const containerClass = previewMode ? 'max-h-64' : '';
+
+    switch (mediaType) {
+      case 'youtube':
+        return (
+          <div className={cn('relative aspect-video w-full', containerClass)}>
+            <iframe
+              src={getYouTubeEmbedUrl(src)}
+              className="w-full h-full rounded-lg"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
+          </div>
+        );
+
+      case 'vimeo':
+        return (
+          <div className={cn('relative aspect-video w-full', containerClass)}>
+            <iframe
+              src={getVimeoEmbedUrl(src)}
+              className="w-full h-full rounded-lg"
+              allow="autoplay; fullscreen; picture-in-picture"
+              allowFullScreen
+            />
+          </div>
+        );
+
+      case 'video':
+        return (
+          <div className={cn('relative group', containerClass)}>
+            <video
+              ref={videoRef}
+              src={src}
+              className="w-full rounded-lg bg-muted"
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onEnded={() => setIsPlaying(false)}
+            />
+            {!isEditing && (
+              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/30 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); togglePlay(); }}
+                    className="p-3 bg-white/90 rounded-full hover:bg-white transition-colors"
+                  >
+                    {isPlaying ? <Pause className="w-6 h-6 text-gray-900" /> : <Play className="w-6 h-6 text-gray-900" />}
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); toggleMute(); }}
+                    className="p-2 bg-white/90 rounded-full hover:bg-white transition-colors"
+                  >
+                    {isMuted ? <VolumeX className="w-4 h-4 text-gray-900" /> : <Volume2 className="w-4 h-4 text-gray-900" />}
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); openFullscreen(); }}
+                    className="p-2 bg-white/90 rounded-full hover:bg-white transition-colors"
+                  >
+                    <Maximize className="w-4 h-4 text-gray-900" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+
+      case 'image':
+      default:
+        return (
+          <img
+            src={src}
+            alt={alt}
+            className={cn('w-full object-contain rounded-lg bg-muted', containerClass)}
+          />
+        );
+    }
+  };
+
   if (isEditing) {
     return (
-      <div className="space-y-3">
-        <div>
-          <label className={labelClass}>Image URL</label>
-          <input type="url" className={inputClass} value={src} onChange={(e) => setSrc(e.target.value)} placeholder="https://..." autoFocus />
+      <div className="space-y-4">
+        {/* Input Mode Toggle */}
+        <div className="flex gap-2 border-b border-border pb-3">
+          <button
+            onClick={() => setInputMode('url')}
+            className={cn(
+              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors',
+              inputMode === 'url'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Link className="w-4 h-4" />
+            URL
+          </button>
+          <button
+            onClick={() => setInputMode('upload')}
+            className={cn(
+              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors',
+              inputMode === 'upload'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Upload className="w-4 h-4" />
+            Upload
+          </button>
         </div>
-        <div>
-          <label className={labelClass}>Alt Text</label>
-          <input type="text" className={inputClass} value={alt} onChange={(e) => setAlt(e.target.value)} placeholder="Describe the image..." />
-        </div>
-        <div>
-          <label className={labelClass}>Caption (optional)</label>
-          <input type="text" className={inputClass} value={caption} onChange={(e) => setCaption(e.target.value)} />
-        </div>
-        {src && (
-          <div className="rounded-lg overflow-hidden border border-border">
-            <img src={src} alt={alt} className="max-h-64 w-full object-contain bg-muted" />
+
+        {inputMode === 'url' ? (
+          <div className="space-y-3">
+            <div>
+              <label className={labelClass}>Media URL (Image, Video, YouTube, or Vimeo)</label>
+              <input
+                type="url"
+                className={inputClass}
+                value={src}
+                onChange={(e) => setSrc(e.target.value)}
+                placeholder="https://... or paste YouTube/Vimeo link"
+                autoFocus
+              />
+              {src && (
+                <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                  {mediaType === 'image' && <Image className="w-3 h-3" />}
+                  {mediaType === 'video' && <Film className="w-3 h-3" />}
+                  {mediaType === 'youtube' && <Film className="w-3 h-3 text-red-500" />}
+                  {mediaType === 'vimeo' && <Film className="w-3 h-3 text-blue-500" />}
+                  <span className="capitalize">{mediaType}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div
+            ref={dropZoneRef}
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onClick={() => fileInputRef.current?.click()}
+            className={cn(
+              'border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors',
+              isDragging
+                ? 'border-primary bg-primary/10'
+                : 'border-border hover:border-primary/50 hover:bg-muted/50'
+            )}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,video/*"
+              onChange={handleFileInputChange}
+              className="hidden"
+            />
+            <div className="flex flex-col items-center gap-2">
+              <Upload className={cn('w-8 h-8', isDragging ? 'text-primary' : 'text-muted-foreground')} />
+              <div className="text-sm text-muted-foreground">
+                {isDragging ? (
+                  <span className="text-primary font-medium">Drop file here</span>
+                ) : (
+                  <>
+                    <span className="font-medium text-foreground">Click to upload</span> or drag and drop
+                  </>
+                )}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Images (PNG, JPG, GIF, WebP) or Videos (MP4, WebM, MOV)
+              </div>
+            </div>
           </div>
         )}
+
+        <div>
+          <label className={labelClass}>Alt Text / Description</label>
+          <input
+            type="text"
+            className={inputClass}
+            value={alt}
+            onChange={(e) => setAlt(e.target.value)}
+            placeholder="Describe the media..."
+          />
+        </div>
+
+        <div>
+          <label className={labelClass}>Caption (optional)</label>
+          <input
+            type="text"
+            className={inputClass}
+            value={caption}
+            onChange={(e) => setCaption(e.target.value)}
+          />
+        </div>
+
+        {/* Preview */}
+        {src && (
+          <div className="relative rounded-lg overflow-hidden border border-border">
+            {renderMediaPreview(true)}
+            <button
+              onClick={() => {
+                setSrc('');
+                setAlt('');
+                setMediaType('image');
+              }}
+              className="absolute top-2 right-2 p-1.5 bg-red-500/90 hover:bg-red-500 text-white rounded-full transition-colors"
+              title="Remove media"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         <div className="flex justify-end gap-2">
           <button onClick={onEndEdit} className="px-3 py-1 text-sm text-muted-foreground hover:text-foreground">Cancel</button>
           <button onClick={handleSave} className="px-3 py-1 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90">Save</button>
@@ -840,8 +1186,18 @@ function ImageBlock({ block, isEditing, onStartEdit, onEndEdit, onSave }: Editab
 
   if (!src) {
     return (
-      <div className={cn('flex items-center justify-center h-32 bg-muted rounded-lg border border-dashed border-border', editableWrapperClass)} onClick={onStartEdit}>
-        <span className="text-muted-foreground italic">Click to add image...</span>
+      <div
+        className={cn(
+          'flex flex-col items-center justify-center h-32 bg-muted rounded-lg border border-dashed border-border gap-2',
+          editableWrapperClass
+        )}
+        onClick={onStartEdit}
+      >
+        <div className="flex items-center gap-3 text-muted-foreground">
+          <Image className="w-5 h-5" />
+          <Film className="w-5 h-5" />
+        </div>
+        <span className="text-muted-foreground italic text-sm">Click to add image or video...</span>
       </div>
     );
   }
@@ -849,7 +1205,7 @@ function ImageBlock({ block, isEditing, onStartEdit, onEndEdit, onSave }: Editab
   return (
     <figure className={cn('space-y-2', editableWrapperClass)} onClick={onStartEdit}>
       <div className="rounded-lg overflow-hidden border border-border">
-        <img src={src} alt={alt} className="w-full object-contain" />
+        {renderMediaPreview()}
       </div>
       {caption && <figcaption className="text-sm text-muted-foreground text-center">{caption}</figcaption>}
     </figure>
