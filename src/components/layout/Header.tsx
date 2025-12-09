@@ -1,6 +1,7 @@
-import { FileText, Settings, HelpCircle } from 'lucide-react';
+import { FileText, HelpCircle } from 'lucide-react';
 import { useDocumentStore, useAppStore } from '../../store';
 import { cn } from '../../lib/utils';
+import { SettingsDropdown } from './SettingsDropdown';
 
 export function Header() {
   const { activeDocument } = useDocumentStore();
@@ -70,12 +71,7 @@ export function Header() {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-1">
-          <button
-            className="p-2 rounded-lg hover:bg-accent transition-colors"
-            title="Settings"
-          >
-            <Settings className="w-4 h-4 text-muted-foreground" />
-          </button>
+          <SettingsDropdown />
           <button
             className="p-2 rounded-lg hover:bg-accent transition-colors"
             title="Help"

@@ -28,8 +28,10 @@ interface UIState {
   chatPanelWidth: number;
   documentPanelVisible: boolean;
   activeSidebarTab: 'chat' | 'history' | 'references';
-  theme: 'dark'; // Only dark theme for now (gold/black)
+  theme: 'dark' | 'light' | 'claude';
   sidebarOpen: boolean;
+  isLoading: boolean;
+  loadingMessage: string | null;
 }
 
 interface AppState {
@@ -56,6 +58,7 @@ interface AppState {
   // UI Actions
   updateUI: (ui: Partial<UIState>) => void;
   toggleSidebar: () => void;
+  setLoading: (isLoading: boolean, message?: string | null) => void;
 }
 
 const initialSession: SessionState = {
@@ -79,6 +82,8 @@ const initialUI: UIState = {
   activeSidebarTab: 'chat',
   theme: 'dark',
   sidebarOpen: true,
+  isLoading: false,
+  loadingMessage: null,
 };
 
 export const useAppStore = create<AppState>()(
@@ -227,6 +232,15 @@ export const useAppStore = create<AppState>()(
             }),
             false,
             'toggleSidebar'
+          ),
+
+        setLoading: (isLoading, message = null) =>
+          set(
+            (state) => ({
+              ui: { ...state.ui, isLoading, loadingMessage: message },
+            }),
+            false,
+            'setLoading'
           ),
       }),
       {

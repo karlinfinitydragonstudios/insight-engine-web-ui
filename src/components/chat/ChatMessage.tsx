@@ -59,16 +59,16 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
           className={cn(
             'rounded-lg px-4 py-2',
             isUser
-              ? 'bg-blue-500 text-white'
+              ? 'bg-primary text-primary-foreground'
               : isSystem
-              ? 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-200'
-              : 'bg-accent text-foreground'
+              ? 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-700 dark:text-yellow-200'
+              : 'bg-muted text-foreground'
           )}
         >
           {isUser ? (
             <p className="text-sm whitespace-pre-wrap">{message.content}</p>
           ) : (
-            <div className="text-sm prose prose-sm prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-pre:my-2 prose-code:bg-black/30 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-black/30 prose-pre:p-3 prose-pre:rounded-lg">
+            <div className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-pre:my-2 prose-code:bg-background/50 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-background/50 prose-pre:p-3 prose-pre:rounded-lg prose-headings:text-foreground prose-p:text-foreground prose-li:text-foreground prose-strong:text-foreground">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {message.content}
               </ReactMarkdown>

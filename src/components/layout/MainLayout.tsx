@@ -1,15 +1,20 @@
 import { useState, useCallback } from 'react';
 import { Header } from './Header';
 import { SplitPanel } from './SplitPanel';
+import { LoadingOverlay } from './LoadingOverlay';
 import { ChatPanel } from '../chat/ChatPanel';
 import { DocumentEditor } from '../document/DocumentEditor';
 import { PipelineStatusBar } from '../pipeline/PipelineStatusBar';
 import { SessionSidebar } from '../sidebar/SessionSidebar';
 import { useAppStore } from '../../store';
+import { useWebSocket } from '../../hooks';
 
 export function MainLayout() {
   const { ui, updateUI, toggleSidebar } = useAppStore();
   const [leftWidth, setLeftWidth] = useState(ui.chatPanelWidth);
+
+  // Initialize WebSocket connection for real-time updates
+  useWebSocket();
 
   const handleWidthChange = useCallback(
     (width: number) => {
@@ -21,6 +26,7 @@ export function MainLayout() {
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
+      <LoadingOverlay isVisible={ui.isLoading} message={ui.loadingMessage || 'Loading...'} />
       <Header />
       <div className="flex-1 flex overflow-hidden">
         {/* Session Sidebar */}

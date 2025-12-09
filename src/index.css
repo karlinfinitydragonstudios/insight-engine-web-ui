@@ -3,7 +3,9 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
+  /* Dark theme (default - gold/black) */
+  :root,
+  [data-theme="dark"] {
     --background: 222 47% 6%;
     --foreground: 210 40% 98%;
 
@@ -31,6 +33,72 @@
     --border: 217 33% 20%;
     --input: 217 33% 20%;
     --ring: 48 100% 50%;
+
+    --radius: 0.5rem;
+  }
+
+  /* Light theme */
+  [data-theme="light"] {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 98%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 48 100% 45%;
+    --primary-foreground: 222 47% 6%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    --accent: 220 14% 96%;
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 48 100% 45%;
+
+    --radius: 0.5rem;
+  }
+
+  /* Claude theme (orange/dark terminal style) */
+  [data-theme="claude"] {
+    --background: 20 14% 10%;
+    --foreground: 30 20% 85%;
+
+    --card: 20 14% 12%;
+    --card-foreground: 30 20% 85%;
+
+    --popover: 20 14% 12%;
+    --popover-foreground: 30 20% 85%;
+
+    --primary: 24 100% 60%;
+    --primary-foreground: 20 14% 10%;
+
+    --secondary: 20 10% 18%;
+    --secondary-foreground: 30 20% 85%;
+
+    --muted: 20 10% 18%;
+    --muted-foreground: 20 10% 55%;
+
+    --accent: 20 10% 18%;
+    --accent-foreground: 30 20% 85%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 30 20% 85%;
+
+    --border: 20 10% 22%;
+    --input: 20 10% 22%;
+    --ring: 24 100% 60%;
 
     --radius: 0.5rem;
   }
