@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Info, AlertTriangle, CheckCircle, XCircle, Plus, X, Upload, Link, Image, Film, Play, Pause, Volume2, VolumeX, Maximize } from 'lucide-react';
+import { Info, AlertTriangle, CheckCircle, XCircle, Plus, X, Upload, Link, Image, Film, Play, Pause, Volume2, VolumeX, Maximize, BarChart3, Database, PenLine, ChevronLeft, ChevronRight, ChevronDown, Eye, EyeOff, Loader2 } from 'lucide-react';
 import type { Block } from '../../types';
 import { cn } from '../../lib/utils';
+import { ChartRenderer } from '../charts/ChartRenderer';
+import type { ChartBlockContent, ChartDataMode, ManualChartType, SlotChartType, ManualChartDataPoint, ChartJsData } from '../../types/slotChart';
+import { SLOT_CHART_TYPES } from '../../types/slotChart';
+import { useSlotGraphData } from '../../hooks/useSlotGraphData';
 
 interface BlockRendererProps {
   block: Block;
@@ -1315,94 +1319,727 @@ function ArchetypeProfileBlock({ block, isEditing, onStartEdit, onEndEdit, onSav
   );
 }
 
-// Chart Block
+// Chart Block - Enhanced with Chart.js and API/Manual modes
 function ChartBlock({ block, isEditing, onStartEdit, onEndEdit, onSave }: EditableBlockProps) {
-  const content = block.content as {
-    chartType?: string;
-    title?: string;
-    data?: Array<{ label: string; value: number }>;
-  };
+  // Parse content with backward compatibility
+  const rawContent = block.content as Record<string, unknown>;
+  const isLegacyFormat = rawContent.data && Array.isArray(rawContent.data) && !rawContent.dataMode;
 
-  const [chartType, setChartType] = useState(content.chartType || 'bar');
+  // Convert legacy format to new format
+  const content: ChartBlockContent = isLegacyFormat
+    ? {
+        dataMode: 'manual',
+        title: rawContent.title as string | undefined,
+        manual: {
+          chartType: (rawContent.chartType as ManualChartType) || 'bar',
+          data: rawContent.data as ManualChartDataPoint[],
+        },
+      }
+    : (rawContent as unknown as ChartBlockContent);
+
+  // State - Default to 'api' mode for new chart blocks
+  const [dataMode, setDataMode] = useState<ChartDataMode>(content.dataMode || 'api');
   const [title, setTitle] = useState(content.title || '');
-  const [data, setData] = useState<Array<{ label: string; value: number }>>(content.data || []);
+
+  // Manual mode state
+  const [manualChartType, setManualChartType] = useState<ManualChartType>(content.manual?.chartType || 'bar');
+  const [manualData, setManualData] = useState<ManualChartDataPoint[]>(content.manual?.data || []);
+
+  // API mode state
+  const [slotChartType, setSlotChartType] = useState<SlotChartType>(content.slotGraph?.chartType || 'balance');
+  const [gameId, setGameId] = useState(content.slotGraph?.gameId || '');
+  const [gameName, setGameName] = useState(content.slotGraph?.gameName || '');
+  const [apiChartData, setApiChartData] = useState<ChartJsData | null>(content.cachedData?.chartJsData || null);
+
+  // Pagination state for API mode
+  const [currentPage, setCurrentPage] = useState(0);
+
+  // Track which datasets are visible for win bucket charts (by label)
+  // null means use server defaults, Set means custom visibility
+  const [visibleDatasets, setVisibleDatasets] = useState<Set<string> | null>(null);
+
+  // Dropdown state for hidden datasets
+  const [showHiddenDropdown, setShowHiddenDropdown] = useState(false);
+
+  // Use the slot graph hook for API data
+  const {
+    games,
+    chartData: fetchedChartData,
+    isLoadingGames,
+    isLoadingChart,
+    chartError,
+    metadata,
+    fetchChartData,
+  } = useSlotGraphData();
+
+  // Chart types that support pagination (per-spin data)
+  const paginatedChartTypes: SlotChartType[] = ['win', 'balance', 'win_detail'];
+  const supportsPagination = paginatedChartTypes.includes(slotChartType);
+
+  // Generate the current request key for what we WANT to display
+  const currentRequestKey = gameId ? `${gameId}-${slotChartType}-${supportsPagination ? currentPage : 0}` : null;
+
+  // Generate a key for what the hook's data represents (from metadata)
+  const hookDataKey = metadata ? `${metadata.gameId}-${metadata.chartType}-${metadata.currentPage}` : null;
+
+  // Track what request key the current apiChartData corresponds to
+  const [apiDataKey, setApiDataKey] = useState<string | null>(null);
+
+  // Track what we last fetched to avoid duplicate fetches
+  const lastFetchedKeyRef = useRef<string | null>(null);
+
+  // Sync fetched chart data to local state when hook data matches what we want
+  // AND differs from what we currently have displayed
+  useEffect(() => {
+    const shouldSync = fetchedChartData && metadata && hookDataKey === currentRequestKey && apiDataKey !== hookDataKey;
+    if (shouldSync) {
+      setApiChartData(fetchedChartData);
+      setApiDataKey(hookDataKey);
+    }
+  }, [fetchedChartData, metadata, hookDataKey, currentRequestKey, apiDataKey]);
+
+  // Show loading if we're in API mode with a game selected and:
+  // The data we have doesn't match what we want
+  const isWaitingForData = dataMode === 'api' && gameId && (
+    apiDataKey !== currentRequestKey || isLoadingChart
+  );
+
+  // Auto-fetch chart data when the request key changes
+  useEffect(() => {
+    if (dataMode === 'api' && gameId && slotChartType && currentRequestKey) {
+      // Only fetch if we haven't already fetched this key
+      if (currentRequestKey !== lastFetchedKeyRef.current) {
+        lastFetchedKeyRef.current = currentRequestKey;
+        const page = supportsPagination ? currentPage : 0;
+        fetchChartData(gameId, slotChartType, 500, page);
+      }
+    }
+  }, [dataMode, gameId, slotChartType, currentPage, currentRequestKey, supportsPagination, fetchChartData]);
+
+  // Reset page to 0 when game or chart type changes
+  const prevGameIdRef = useRef(gameId);
+  const prevChartTypeRef = useRef(slotChartType);
 
   useEffect(() => {
-    setChartType(content.chartType || 'bar');
-    setTitle(content.title || '');
-    setData(content.data || []);
-  }, [content]);
+    if (prevGameIdRef.current !== gameId || prevChartTypeRef.current !== slotChartType) {
+      prevGameIdRef.current = gameId;
+      prevChartTypeRef.current = slotChartType;
+      if (currentPage !== 0) {
+        setCurrentPage(0);
+      }
+    }
+  }, [gameId, slotChartType, currentPage]);
+
+  // Sync state from content prop - same flow for initial load and after save
+  useEffect(() => {
+    const newContent: ChartBlockContent = isLegacyFormat
+      ? {
+          dataMode: 'manual',
+          title: rawContent.title as string | undefined,
+          manual: {
+            chartType: (rawContent.chartType as ManualChartType) || 'bar',
+            data: rawContent.data as ManualChartDataPoint[],
+          },
+        }
+      : (rawContent as unknown as ChartBlockContent);
+
+    setDataMode(newContent.dataMode || 'api');
+    setTitle(newContent.title || '');
+    setManualChartType(newContent.manual?.chartType || 'bar');
+    setManualData(newContent.manual?.data || []);
+    setSlotChartType(newContent.slotGraph?.chartType || 'balance');
+    setGameId(newContent.slotGraph?.gameId || '');
+    setGameName(newContent.slotGraph?.gameName || '');
+    // Reset chart data and key - will be fetched fresh by the fetch effect
+    setApiChartData(null);
+    setApiDataKey(null);
+    // Reset the last fetched key so fetch effect triggers
+    lastFetchedKeyRef.current = null;
+  }, [rawContent, isLegacyFormat]);
 
   const handleSave = async () => {
+    // Only save configuration, NOT the chart data (it will be fetched fresh on load)
+    const newContent: ChartBlockContent = {
+      dataMode,
+      title: title || undefined,
+    };
+
+    if (dataMode === 'manual') {
+      newContent.manual = {
+        chartType: manualChartType,
+        data: manualData,
+      };
+    } else {
+      // For API mode, only save the configuration (gameId, chartType, gameName)
+      // The actual chart data will be fetched when the block loads
+      newContent.slotGraph = {
+        chartType: slotChartType,
+        gameId,
+        gameName,
+      };
+    }
+
     if (onSave) {
-      await onSave(block.id, { chartType, title, data });
+      await onSave(block.id, newContent as unknown as Record<string, unknown>);
     }
     onEndEdit();
   };
 
-  const maxValue = Math.max(...data.map((d) => d.value), 1);
+  // Convert manual data to Chart.js format
+  const manualChartJsData: ChartJsData = {
+    labels: manualData.map((d) => d.label),
+    datasets: [
+      {
+        label: title || 'Data',
+        data: manualData.map((d) => d.value),
+        backgroundColor: manualData.map((d) => d.color || undefined).filter(Boolean) as string[],
+      },
+    ],
+  };
+
+  // Determine which chart data and type to use
+  const displayChartType = dataMode === 'api' ? slotChartType : manualChartType;
+  const displayChartData = dataMode === 'api' ? apiChartData : manualChartJsData;
+  const hasData = dataMode === 'api' ? !!apiChartData : manualData.length > 0;
 
   if (isEditing) {
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className={labelClass}>Chart Title</label>
-            <input type="text" className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
-          </div>
-          <div>
-            <label className={labelClass}>Chart Type</label>
-            <select className={inputClass} value={chartType} onChange={(e) => setChartType(e.target.value)}>
-              <option value="bar">Bar Chart</option>
-              <option value="horizontal-bar">Horizontal Bar</option>
-              <option value="pie">Pie Chart</option>
-            </select>
-          </div>
+        {/* Mode Toggle */}
+        <div className="flex items-center gap-2 p-1 bg-muted rounded-lg w-fit">
+          <button
+            onClick={() => setDataMode('api')}
+            className={cn(
+              'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
+              dataMode === 'api'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Database className="w-4 h-4" />
+            Slot Graph API
+          </button>
+          <button
+            onClick={() => setDataMode('manual')}
+            className={cn(
+              'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
+              dataMode === 'manual'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <PenLine className="w-4 h-4" />
+            Manual Entry
+          </button>
         </div>
+
+        {/* Title Input */}
         <div>
-          <label className={labelClass}>Data Points</label>
-          <div className="space-y-2">
-            {data.map((d, i) => (
-              <div key={i} className="flex gap-2">
-                <input type="text" className={cn(inputClass, 'flex-1')} placeholder="Label" value={d.label} onChange={(e) => { const u = [...data]; u[i] = { ...u[i], label: e.target.value }; setData(u); }} />
-                <input type="number" className={cn(inputClass, 'w-24')} placeholder="Value" value={d.value} onChange={(e) => { const u = [...data]; u[i] = { ...u[i], value: parseFloat(e.target.value) || 0 }; setData(u); }} />
-                <button onClick={() => setData(data.filter((_, idx) => idx !== i))} className="p-2 text-red-400 hover:bg-red-500/10 rounded"><X className="w-4 h-4" /></button>
-              </div>
-            ))}
-            <button onClick={() => setData([...data, { label: '', value: 0 }])} className="flex items-center gap-1 text-sm text-primary hover:text-primary/80">
-              <Plus className="w-4 h-4" /> Add Data Point
-            </button>
-          </div>
+          <label className={labelClass}>Chart Title</label>
+          <input
+            type="text"
+            className={inputClass}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Enter chart title..."
+          />
         </div>
+
+        {/* API Mode Editor */}
+        {dataMode === 'api' && (
+          <div className="space-y-4 p-4 border border-border rounded-lg bg-muted/30">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Database className="w-4 h-4" />
+              <span>Connect to slot graph data API</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>Chart Type</label>
+                <select
+                  className={inputClass}
+                  value={slotChartType}
+                  onChange={(e) => setSlotChartType(e.target.value as SlotChartType)}
+                >
+                  {SLOT_CHART_TYPES.map((ct) => (
+                    <option key={ct.id} value={ct.id}>
+                      {ct.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Game</label>
+                <select
+                  className={inputClass}
+                  value={gameId}
+                  onChange={(e) => {
+                    const selectedGame = games.find(g => g.id === e.target.value);
+                    setGameId(e.target.value);
+                    setGameName(selectedGame?.name || e.target.value);
+                  }}
+                  disabled={isLoadingGames}
+                >
+                  <option value="">
+                    {isLoadingGames ? 'Loading games...' : 'Select a game...'}
+                  </option>
+                  {games.map((game) => (
+                    <option key={game.id} value={game.id}>
+                      {game.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Selected chart type description */}
+            {slotChartType && (
+              <p className="text-xs text-muted-foreground">
+                {SLOT_CHART_TYPES.find((ct) => ct.id === slotChartType)?.description}
+              </p>
+            )}
+
+            {/* Loading State */}
+            {isLoadingChart && (
+              <div className="flex items-center justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+              </div>
+            )}
+
+            {/* Error State */}
+            {chartError && (
+              <div className="p-3 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-sm">
+                {chartError}
+              </div>
+            )}
+
+            {/* API Chart Preview */}
+            {apiChartData && !isLoadingChart && (
+              <div className="mt-4">
+                <ChartRenderer
+                  data={apiChartData}
+                  chartType={slotChartType}
+                  title={title}
+                  height={250}
+                  visibleDatasets={visibleDatasets}
+                />
+
+                {/* Dataset visibility controls for win bucket charts in edit mode */}
+                {(slotChartType === 'win_bucket_rtp' || slotChartType === 'win_bucket_probability') && (
+                  <div className="mt-3 space-y-2">
+                    {(() => {
+                      const allDatasets = apiChartData.datasets;
+                      const effectiveVisible = visibleDatasets ?? new Set(
+                        allDatasets.filter(d => !d.hidden).map(d => d.label)
+                      );
+                      const visibleList = allDatasets.filter(d => effectiveVisible.has(d.label));
+                      const hiddenList = allDatasets.filter(d => !effectiveVisible.has(d.label));
+
+                      return (
+                        <>
+                          {/* Visible datasets as clickable pills */}
+                          <div className="flex flex-wrap gap-1.5">
+                            {visibleList.map((ds) => (
+                              <button
+                                key={ds.label}
+                                type="button"
+                                onClick={() => {
+                                  if (visibleList.length <= 1) return;
+                                  const newSet = new Set(effectiveVisible);
+                                  newSet.delete(ds.label);
+                                  setVisibleDatasets(newSet);
+                                }}
+                                className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-primary/20 text-primary hover:bg-primary/30 transition-colors"
+                                title="Click to hide"
+                              >
+                                <span
+                                  className="w-2 h-2 rounded-full"
+                                  style={{ backgroundColor: typeof ds.borderColor === 'string' ? ds.borderColor : ds.borderColor?.[0] || '#3b82f6' }}
+                                />
+                                {ds.label}
+                                <EyeOff className="w-3 h-3 opacity-50" />
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* Hidden datasets dropdown */}
+                          {hiddenList.length > 0 && (
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() => setShowHiddenDropdown(!showHiddenDropdown)}
+                                className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors"
+                              >
+                                <ChevronDown className={cn('w-3.5 h-3.5 transition-transform', showHiddenDropdown && 'rotate-180')} />
+                                {hiddenList.length} hidden dataset{hiddenList.length > 1 ? 's' : ''}
+                              </button>
+
+                              {showHiddenDropdown && (
+                                <div className="absolute z-10 mt-1 p-1.5 bg-popover border border-border rounded-lg shadow-lg min-w-[150px]">
+                                  {hiddenList.map((ds) => (
+                                    <button
+                                      key={ds.label}
+                                      type="button"
+                                      onClick={() => {
+                                        const newSet = new Set(effectiveVisible);
+                                        newSet.add(ds.label);
+                                        setVisibleDatasets(newSet);
+                                        setShowHiddenDropdown(false);
+                                      }}
+                                      className="flex items-center gap-2 w-full px-2 py-1.5 text-xs text-left rounded hover:bg-muted transition-colors"
+                                    >
+                                      <span
+                                        className="w-2 h-2 rounded-full"
+                                        style={{ backgroundColor: typeof ds.borderColor === 'string' ? ds.borderColor : ds.borderColor?.[0] || '#3b82f6' }}
+                                      />
+                                      <span className="flex-1">{ds.label}</span>
+                                      <Eye className="w-3 h-3 text-muted-foreground" />
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+
+                {/* Pagination controls in edit mode */}
+                {supportsPagination && metadata && metadata.totalPages > 1 && (
+                  <div className="flex items-center justify-center gap-4 mt-2 py-2">
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage(Math.max(0, currentPage - 1))}
+                      disabled={currentPage === 0 || isLoadingChart}
+                      className={cn(
+                        'flex items-center gap-1 px-3 py-1 text-sm rounded transition-colors',
+                        currentPage === 0 || isLoadingChart
+                          ? 'text-muted-foreground/50 cursor-not-allowed'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                      )}
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Prev
+                    </button>
+
+                    <span className="text-sm text-muted-foreground">
+                      Page {currentPage + 1} of {metadata.totalPages}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage(Math.min(metadata.totalPages - 1, currentPage + 1))}
+                      disabled={currentPage >= metadata.totalPages - 1 || isLoadingChart}
+                      className={cn(
+                        'flex items-center gap-1 px-3 py-1 text-sm rounded transition-colors',
+                        currentPage >= metadata.totalPages - 1 || isLoadingChart
+                          ? 'text-muted-foreground/50 cursor-not-allowed'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                      )}
+                    >
+                      Next
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Manual Mode Editor */}
+        {dataMode === 'manual' && (
+          <div className="space-y-4">
+            <div>
+              <label className={labelClass}>Chart Type</label>
+              <select
+                className={inputClass}
+                value={manualChartType}
+                onChange={(e) => setManualChartType(e.target.value as ManualChartType)}
+              >
+                <option value="bar">Bar Chart</option>
+                <option value="line">Line Chart</option>
+                <option value="pie">Pie Chart</option>
+                <option value="doughnut">Doughnut Chart</option>
+              </select>
+            </div>
+
+            <div>
+              <label className={labelClass}>Data Points</label>
+              <div className="space-y-2">
+                {manualData.map((d, i) => (
+                  <div key={i} className="flex gap-2">
+                    <input
+                      type="text"
+                      className={cn(inputClass, 'flex-1')}
+                      placeholder="Label"
+                      value={d.label}
+                      onChange={(e) => {
+                        const u = [...manualData];
+                        u[i] = { ...u[i], label: e.target.value };
+                        setManualData(u);
+                      }}
+                    />
+                    <input
+                      type="number"
+                      className={cn(inputClass, 'w-24')}
+                      placeholder="Value"
+                      value={d.value}
+                      onChange={(e) => {
+                        const u = [...manualData];
+                        u[i] = { ...u[i], value: parseFloat(e.target.value) || 0 };
+                        setManualData(u);
+                      }}
+                    />
+                    <input
+                      type="color"
+                      className="w-10 h-10 rounded cursor-pointer bg-transparent"
+                      value={d.color || '#3b82f6'}
+                      onChange={(e) => {
+                        const u = [...manualData];
+                        u[i] = { ...u[i], color: e.target.value };
+                        setManualData(u);
+                      }}
+                      title="Color"
+                    />
+                    <button
+                      onClick={() => setManualData(manualData.filter((_, idx) => idx !== i))}
+                      className="p-2 text-red-400 hover:bg-red-500/10 rounded"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setManualData([...manualData, { label: '', value: 0 }])}
+                  className="flex items-center gap-1 text-sm text-primary hover:text-primary/80"
+                >
+                  <Plus className="w-4 h-4" /> Add Data Point
+                </button>
+              </div>
+            </div>
+
+            {/* Manual Chart Preview */}
+            {manualData.length > 0 && (
+              <div className="mt-4 p-4 border border-border rounded-lg">
+                <ChartRenderer
+                  data={manualChartJsData}
+                  chartType={manualChartType}
+                  title={title}
+                  height={250}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Action Buttons */}
         <div className="flex justify-end gap-2">
-          <button onClick={onEndEdit} className="px-3 py-1 text-sm text-muted-foreground hover:text-foreground">Cancel</button>
-          <button onClick={handleSave} className="px-3 py-1 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90">Save</button>
+          <button
+            onClick={onEndEdit}
+            className="px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            className="px-3 py-1 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
+          >
+            Save
+          </button>
         </div>
       </div>
     );
   }
 
+  // View mode
   return (
     <div className={cn('space-y-3', editableWrapperClass)} onClick={onStartEdit}>
       {title && <h3 className="text-lg font-semibold text-foreground">{title}</h3>}
-      {data.length > 0 ? (
-        <div className="space-y-2">
-          {data.map((d, i) => (
-            <div key={i} className="flex items-center gap-3">
-              <span className="text-sm text-muted-foreground w-24 truncate">{d.label}</span>
-              <div className="flex-1 h-6 bg-muted rounded overflow-hidden">
-                <div
-                  className="h-full bg-primary transition-all"
-                  style={{ width: `${(d.value / maxValue) * 100}%` }}
-                />
-              </div>
-              <span className="text-sm font-medium text-foreground w-16 text-right">{d.value}</span>
-            </div>
-          ))}
+
+      {/* Mode Badge */}
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            'inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium',
+            dataMode === 'api' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
+          )}
+        >
+          {dataMode === 'api' ? (
+            <>
+              <Database className="w-3 h-3" />
+              {SLOT_CHART_TYPES.find((ct) => ct.id === slotChartType)?.label || 'API'}
+            </>
+          ) : (
+            <>
+              <BarChart3 className="w-3 h-3" />
+              {manualChartType.charAt(0).toUpperCase() + manualChartType.slice(1)} Chart
+            </>
+          )}
+        </span>
+        {dataMode === 'api' && gameName && (
+          <span className="text-xs text-muted-foreground">• {gameName}</span>
+        )}
+      </div>
+
+      {/* Loading overlay for API mode */}
+      {isWaitingForData && (
+        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+          <Loader2 className="w-10 h-10 mb-3 animate-spin text-primary" />
+          <p className="text-sm">Loading chart data...</p>
         </div>
-      ) : (
-        <p className="text-muted-foreground italic text-sm">Click to add chart data...</p>
       )}
+
+      {/* Chart display (hide when waiting for data) */}
+      {!isWaitingForData && hasData && displayChartData ? (
+        <>
+          <ChartRenderer
+            data={displayChartData}
+            chartType={displayChartType}
+            height={300}
+            visibleDatasets={visibleDatasets}
+          />
+
+          {/* Dataset visibility controls for win bucket charts */}
+          {dataMode === 'api' && (slotChartType === 'win_bucket_rtp' || slotChartType === 'win_bucket_probability') && displayChartData && (
+            <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
+              {/* Visible datasets */}
+              {(() => {
+                const allDatasets = displayChartData.datasets;
+                const effectiveVisible = visibleDatasets ?? new Set(
+                  allDatasets.filter(d => !d.hidden).map(d => d.label)
+                );
+                const visibleList = allDatasets.filter(d => effectiveVisible.has(d.label));
+                const hiddenList = allDatasets.filter(d => !effectiveVisible.has(d.label));
+
+                return (
+                  <>
+                    {/* Visible datasets as clickable pills */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {visibleList.map((ds, idx) => (
+                        <button
+                          key={ds.label}
+                          onClick={() => {
+                            // Don't allow hiding last visible dataset
+                            if (visibleList.length <= 1) return;
+                            const newSet = new Set(effectiveVisible);
+                            newSet.delete(ds.label);
+                            setVisibleDatasets(newSet);
+                          }}
+                          className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-primary/20 text-primary hover:bg-primary/30 transition-colors"
+                          title="Click to hide"
+                        >
+                          <span
+                            className="w-2 h-2 rounded-full"
+                            style={{ backgroundColor: typeof ds.borderColor === 'string' ? ds.borderColor : ds.borderColor?.[0] || '#3b82f6' }}
+                          />
+                          {ds.label}
+                          <EyeOff className="w-3 h-3 opacity-50" />
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Hidden datasets dropdown */}
+                    {hiddenList.length > 0 && (
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowHiddenDropdown(!showHiddenDropdown)}
+                          className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors"
+                        >
+                          <ChevronDown className={cn('w-3.5 h-3.5 transition-transform', showHiddenDropdown && 'rotate-180')} />
+                          {hiddenList.length} hidden dataset{hiddenList.length > 1 ? 's' : ''}
+                        </button>
+
+                        {showHiddenDropdown && (
+                          <div className="absolute z-10 mt-1 p-1.5 bg-popover border border-border rounded-lg shadow-lg min-w-[150px]">
+                            {hiddenList.map((ds) => (
+                              <button
+                                key={ds.label}
+                                onClick={() => {
+                                  const newSet = new Set(effectiveVisible);
+                                  newSet.add(ds.label);
+                                  setVisibleDatasets(newSet);
+                                  setShowHiddenDropdown(false);
+                                }}
+                                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs text-left rounded hover:bg-muted transition-colors"
+                              >
+                                <span
+                                  className="w-2 h-2 rounded-full"
+                                  style={{ backgroundColor: typeof ds.borderColor === 'string' ? ds.borderColor : ds.borderColor?.[0] || '#3b82f6' }}
+                                />
+                                <span className="flex-1">{ds.label}</span>
+                                <Eye className="w-3 h-3 text-muted-foreground" />
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Controls bar for API mode */}
+          {dataMode === 'api' && (
+            <div
+              className="flex items-center justify-between mt-2 py-2 border-t border-border/50"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Spacer for left side */}
+              <div />
+
+              {/* Pagination controls */}
+              {supportsPagination && metadata && metadata.totalPages > 1 && (
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setCurrentPage(Math.max(0, currentPage - 1))}
+                    disabled={currentPage === 0 || isLoadingChart}
+                    className={cn(
+                      'flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors',
+                      currentPage === 0 || isLoadingChart
+                        ? 'text-muted-foreground/50 cursor-not-allowed'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                    )}
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    Prev
+                  </button>
+
+                  <span className="text-xs text-muted-foreground">
+                    {currentPage + 1} / {metadata.totalPages}
+                  </span>
+
+                  <button
+                    onClick={() => setCurrentPage(Math.min(metadata.totalPages - 1, currentPage + 1))}
+                    disabled={currentPage >= metadata.totalPages - 1 || isLoadingChart}
+                    className={cn(
+                      'flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors',
+                      currentPage >= metadata.totalPages - 1 || isLoadingChart
+                        ? 'text-muted-foreground/50 cursor-not-allowed'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                    )}
+                  >
+                    Next
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* Spacer when no pagination */}
+              {!(supportsPagination && metadata && metadata.totalPages > 1) && <div />}
+            </div>
+          )}
+        </>
+      ) : !isWaitingForData ? (
+        <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+          <BarChart3 className="w-12 h-12 mb-3 opacity-50" />
+          <p className="text-sm italic">Click to configure chart...</p>
+        </div>
+      ) : null}
     </div>
   );
 }

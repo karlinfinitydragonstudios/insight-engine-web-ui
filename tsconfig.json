@@ -10,20 +10,19 @@
     "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
     "module": "esnext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "baseUrl": "src",
     "paths": {
-      "@/*": ["./*"],
-      "@/components/*": ["components/*"],
-      "@/hooks/*": ["hooks/*"],
-      "@/store/*": ["store/*"],
-      "@/services/*": ["services/*"],
-      "@/types/*": ["types/*"],
-      "@/lib/*": ["lib/*"]
+      "@/*": ["./src/*"],
+      "@/components/*": ["./src/components/*"],
+      "@/hooks/*": ["./src/hooks/*"],
+      "@/store/*": ["./src/store/*"],
+      "@/services/*": ["./src/services/*"],
+      "@/types/*": ["./src/types/*"],
+      "@/lib/*": ["./src/lib/*"]
     }
   },
   "include": ["src"],

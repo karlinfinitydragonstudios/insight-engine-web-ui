@@ -8,6 +8,7 @@ import { authRouter } from './routes/auth';
 import { documentsRouter } from './routes/documents';
 import { chatRouter } from './routes/chat';
 import { sessionsRouter } from './routes/sessions';
+import { chartsRouter } from './routes/charts';
 import { WebSocketHandler } from './websocket/WebSocketHandler';
 
 // Load environment variables
@@ -21,7 +22,7 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // Increase limit for larger document payloads
 
 // Health check
 app.get('/health', (req, res) => {
@@ -33,6 +34,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/sessions', sessionsRouter);
+app.use('/api/charts', chartsRouter);
 
 // Create HTTP server
 const httpServer = createServer(app);
